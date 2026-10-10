@@ -66,6 +66,12 @@ jobs:
           python -m pip install --upgrade pip
           pip install requests pycryptodome PyYAML loguru
 
+      # Pillow 是核心依赖（二维码渲染必须），GUI 作业要装齐，否则测的不是真实环境
+      - name: Install GUI test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests pycryptodome PyYAML loguru Pillow
+
       - name: GUI 冒烟测试
         run: python tests/gui_smoke.py
 

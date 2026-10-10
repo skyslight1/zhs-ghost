@@ -57,12 +57,22 @@ def main() -> int:
             win.update()
         check(True, "四个标签页都能渲染")
 
-        # 二维码弹窗生命周期：使用一个有效 PNG，确认显示对象持有引用，关闭后真正销毁。
+        # 二维码弹窗生命周期：确认显示对象持有引用，关闭后真正销毁。
+        # 优先用真实 PNG 走一遍 to_photo；CI 可能没装 Pillow，此时用纯 Tk 的
+        # PhotoImage 桩替换渲染函数 —— 生命周期逻辑与 Pillow 无关，必须永远可测。
         try:
             import base64
+            import zhsgo.gui.qr as qr_mod
+
             qr_bytes = base64.b64decode(
                 "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
             )
+            real_to_photo = qr_mod.to_photo
+            if real_to_photo(qr_bytes, size=4) is None:
+                def stub_render(image_bytes, size=380):
+                    return tk.PhotoImage(master=win, width=4, height=4)
+                qr_mod.to_photo = stub_render
+
             win.tab_study.show_qr(qr_bytes)
             win.update()
             qr_win = win.tab_study._qr_window
@@ -71,6 +81,8 @@ def main() -> int:
             win.tab_study._on_qr_window_closed()
             win.update()
             check(win.tab_study._qr_window is None, "关闭二维码后弹窗引用清理")
+
+            qr_mod.to_photo = real_to_photo
         except Exception as e:
             check(False, f"二维码弹窗生命周期异常: {e}")
 
