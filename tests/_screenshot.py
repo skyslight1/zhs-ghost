@@ -55,18 +55,32 @@ def main() -> int:
     win.focus_force()
     win.update()
 
-    # 填充一些假数据，不然截图里全是 "-"
-    win.tab_study.set_account(True, "b3f1c0a2-9d4e-4a17-8c55-1e2f3a4b5c6d",
+    # ------------------------------------------------------------------
+    # 把配置换成一份纯默认值。
+    #
+    # MainWindow 启动时会读用户本地的 config.yaml，而配置页会把里面的
+    # 账号、密码、代理、推送 token 原样显示出来 —— 直接截图等于把这些
+    # 发到仓库里。这里整个替换掉，并且把 save() 打桩，
+    # 免得关窗口时 on_close 又把演示数据写回用户的真实配置。
+    # ------------------------------------------------------------------
+    from zhsgo.config import Config
+
+    win.cfg = Config.from_dict({}, HERE)
+    win.cfg.save = lambda *a, **k: ""          # type: ignore[assignment]
+    win.tab_config.reload()
+
+    # 以下全部是编造的演示数据，不来自任何真实账号。
+    win.tab_study.set_account(True, "00000000-0000-0000-0000-000000000000",
                               "今日 45.2/250 分钟 | 会话 1/4 | 本次会话已 12 分钟")
     win.tab_study.update_progress(Progress(
         phase=PHASE_STUDY, course="中国近现代史纲要", video="第一章 进入近代中国 / 1.1 鸦片战争前的中国",
         message="学习中 1.1 鸦片战争前的中国", current=186.0, total=1111.0,
         extra={"reported": 150.0}))
     win.tab_courses.set_courses([
-        {"type": "zhidao", "name": "中国近现代史纲要", "id": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4"},
-        {"type": "zhidao", "name": "思想道德与法治", "id": "b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5"},
-        {"type": "hike", "name": "高等数学（上）", "id": "1919"},
-        {"type": "hike", "name": "大学英语视听说", "id": "2048"},
+        {"type": "zhidao", "name": "中国近现代史纲要", "id": "00000000000000000000000000000001"},
+        {"type": "zhidao", "name": "思想道德与法治", "id": "00000000000000000000000000000002"},
+        {"type": "hike", "name": "高等数学（上）", "id": "1001"},
+        {"type": "hike", "name": "大学英语视听说", "id": "1002"},
     ])
     for line, lvl in (
         ("17:32:01  INFO    开始共享课：中国近现代史纲要", "INFO"),
@@ -82,7 +96,6 @@ def main() -> int:
     ):
         win.tab_log.append(line, lvl)
 
-    win.tab_config.reload()
     win.update()
 
     def capture(index: int, name: str) -> None:
@@ -124,12 +137,28 @@ def _window_rect(win) -> tuple:
 
         hwnd = int(win.wm_frame(), 16)
         rect = wintypes.RECT()
+        # GetWindowRect 给的是**含 DWM 阴影**的外框，Win10/11 上那圈不可见
+        # 边框大约 8px —— 按它裁剪会把窗口旁边别的窗口内容一起截进来。
+        # DWMWA_EXTENDED_FRAME_BOUNDS 才是肉眼可见的窗口边界。
+        DWMWA_EXTENDED_FRAME_BOUNDS = 9
+        hr = ctypes.windll.dwmapi.DwmGetWindowAttribute(
+            wintypes.HWND(hwnd), DWMWA_EXTENDED_FRAME_BOUNDS,
+            ctypes.byref(rect), ctypes.sizeof(rect),
+        )
+        if hr == 0 and rect.right > rect.left and rect.bottom > rect.top:
+            return (rect.left, rect.top, rect.right, rect.bottom)
+
         if ctypes.windll.user32.GetWindowRect(hwnd, ctypes.byref(rect)):
             return (rect.left, rect.top, rect.right, rect.bottom)
     except Exception:
         pass
     x, y = win.winfo_rootx(), win.winfo_rooty()
     return (x, y, x + win.winfo_width(), y + win.winfo_height())
+
+
+# 四边各再内缩一点。窗口有 1px 描边和圆角，贴着边界裁会带进背景色，
+# 放大看就是一圈杂边。
+INSET = 2
 
 
 def _grab(win, _index: int, name: str) -> None:
@@ -140,7 +169,8 @@ def _grab(win, _index: int, name: str) -> None:
     win.update()
 
     left, top, right, bottom = _window_rect(win)
-    img = ImageGrab.grab(bbox=(left, top, right, bottom))
+    bbox = (left + INSET, top + INSET, right - INSET, bottom - INSET)
+    img = ImageGrab.grab(bbox=bbox)
     path = os.path.join(OUT, f"{name}.png")
     img.save(path)
     print(f"  {path}  ({img.width}x{img.height})")
