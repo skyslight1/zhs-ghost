@@ -1,0 +1,15 @@
+# 核心（必装）
+requests>=2.31
+pycryptodome>=3.19
+Pillow>=10.0
+PyYAML>=6.0
+loguru>=0.7
+
+# 人机验证中继（强烈建议装，否则 -12 只能靠人工）
+playwright>=1.44
+ddddocr>=1.5.6
+opencv-python>=4.8
+numpy>=1.24
+
+# AI 课程答题（只有 ai.backend=openai 时才需要）
+openai>=1.30

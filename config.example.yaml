@@ -1,0 +1,117 @@
+# ============================================================
+# zhsgo 配置
+# 复制为 config.yaml 后填写。所有相对路径都相对本文件所在目录。
+# ============================================================
+
+# ---------- 运行 ----------
+state_file: "./state/state.json"     # 指纹、配额、登录态都存这
+proxies: {}                          # 例: { http: "http://127.0.0.1:7890", https: "..." }
+timeout: 15
+
+# ---------- 登录 ----------
+auth:
+  username: ""
+  password: ""
+  # 账号密码登录目前很容易吃 -4（要求验证码），推荐扫码登录
+  use_qr: true
+  save_cookies: true
+  qr_in_terminal: true
+
+# ---------- 指纹 ----------
+# 留空则随机挑一个并**固定写入 state_file**（换号不换指纹）
+fingerprint:
+  chrome_major: 0        # 0 = 自动挑选
+  platform: ""           # "" = 自动挑选，可选 Windows / macOS
+
+# ---------- 节拍整形（权重最大）----------
+pacer:
+  enabled: true
+  max_speed: 1.5              # 共享课前端上限。校内课实际是 1.25，可下调
+  default_speed: 1.25
+  speed_jitter: 0.015
+  report_interval: [22, 47]   # 秒。对数正态生成，别再改成固定 30
+  report_sigma: 0.20
+  pause_chance: 0.0025        # 每秒触发微暂停的概率
+  pause_seconds: [10, 70]
+  away_chance: 0.05           # 每次上报有 5% 概率追加一段"人离开了"
+  away_extra: [70, 200]
+  inter_video_rest: [4, 90]
+  real_millisecond_ts: true   # 必须 true。false 会退化成 *000 结尾的机器人时间戳
+  ts_jitter_ms: [-40, 40]
+
+# ---------- 会话与配额 ----------
+budget:
+  enabled: true
+  session_minutes: [95, 160]  # 单次连续学习上限
+  rest_minutes: [20, 55]      # 到点强制休息
+  daily_minutes: 250          # 单日总时长上限
+  daily_sessions: 4           # 单日最多几次会话
+  per_course_minutes: 0       # 单门课时限，0 = 不限
+
+# ---------- 风控总控 ----------
+guard:
+  enabled: true
+  retry_after_unlock: 3       # 过一次验证码后允许重试几次
+  settle_seconds: [3, 9]      # 过检后等待多久再重试
+  max_captcha_events: 15      # 单次运行触发验证码次数上限，防死循环
+  soft_fail: false            # true = 恢复失败时返回错误响应而不是抛异常
+
+# ---------- 人机验证中继 ----------
+relay:
+  enabled: true
+  headless: false             # 建议 false：无头浏览器指纹明显更差
+  channel: ""                 # "" = playwright 自带 chromium；也可填 chrome / msedge
+  user_data_dir: "./state/browser_profile"
+  screenshot_dir: "./logs/shots"
+  wait_captcha_seconds: 75    # 打开学习页后等验证码出现的最长时间
+  max_solve_retry: 6          # 自动识别重试次数
+  manual_wait_seconds: 300    # 自动失败后等人工介入的时长（0 = 不等）
+  beep_on_manual: true
+  drag_duration_ms: [900, 1600]
+  slider_offset_fix: -8       # 滑块缺口系统偏差校正（按屏幕 DPR 微调）
+  click_settle_ms: [420, 1100]
+
+# ---------- 学习 ----------
+study:
+  speed: 0                    # 0 = 用 pacer.default_speed
+  end_threshold: 0.91         # 高于该比例视为完成
+  tree_view: true
+  progress_view: true
+  initial_report: true        # 进视频时先发一次初始化上报（前端确实会发）
+  cache_report: false         # 是否同时发 cache 层上报
+  prime_video: true           # 拉一次播放地址和首个分片，制造 CDN 侧流量痕迹
+  quiz_delay: [2, 6]          # 弹题从出现到提交的人为延迟
+  max_video_seconds: 14400
+
+# ---------- AI 课程答题 ----------
+ai:
+  enabled: false
+  backend: zhidao             # zhidao = 用智慧树自带大模型（不需要 key）
+                              # openai = 任意 OpenAI 兼容接口
+  skip_exam: false
+  max_exam_attempts: 5
+  give_up_below: 30
+  target_mastery: 90
+  openai:
+    base_url: "https://api.deepseek.com/v1"
+    api_key: ""
+    model: "deepseek-chat"
+    stream: false
+  context:
+    course_name: ""
+    theme: ""
+    knowledge_point: ""
+
+# ---------- 通知 ----------
+notify:
+  enabled: true
+  serverchan_key: ""
+  dingtalk_webhook: ""
+  telegram_bot_token: ""
+  telegram_chat_id: ""
+  local_beep: true
+
+# ---------- 日志 ----------
+log:
+  dir: "./logs"
+  level: "INFO"

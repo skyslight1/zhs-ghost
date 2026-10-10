@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "zhsgo"
+version = "1.0.0"
+description = "智慧树自动学习工具 —— 风控感知架构，内置人机验证中继"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+    "requests>=2.31",
+    "pycryptodome>=3.19",
+    "Pillow>=10.0",
+    "PyYAML>=6.0",
+    "loguru>=0.7",
+]
+
+[project.optional-dependencies]
+# 验证码自动过检（强烈建议装）
+relay = ["playwright>=1.44", "ddddocr>=1.5.6", "opencv-python>=4.8", "numpy>=1.24"]
+# AI 课程答题
+ai = ["openai>=1.30"]
+
+[project.scripts]
+zhsgo = "zhsgo.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["zhsgo*"]

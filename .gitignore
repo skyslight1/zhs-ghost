@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+env/
+
+# 本地运行产物（含账号配置、登录态、浏览器指纹，绝对不要提交）
+config.yaml
+state/
+logs/
+courses.json
+tests/_tmp_state.json
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
