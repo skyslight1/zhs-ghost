@@ -22,11 +22,16 @@ def setup(log_dir: str = "./logs", level: str = "INFO", to_console: bool = True)
     os.makedirs(log_dir, exist_ok=True)
     logger.remove()
 
-    if to_console:
-        logger.add(
-            sys.stderr, level=level, colorize=True,
-            format="<green>{time:HH:mm:ss}</green> | <level>{level: <7}</level> | <level>{message}</level>",
-        )
+    # 打包成 windowed exe 时 sys.stderr 是 None，直接 add 会抛异常。
+    # 那种情况下日志只走文件和 GUI 的 sink。
+    if to_console and sys.stderr is not None:
+        try:
+            logger.add(
+                sys.stderr, level=level, colorize=True,
+                format="<green>{time:HH:mm:ss}</green> | <level>{level: <7}</level> | <level>{message}</level>",
+            )
+        except Exception:
+            pass
     logger.add(
         os.path.join(log_dir, "zhsgo_{time:YYYY-MM-DD}.log"),
         level="DEBUG", rotation="00:00", retention="14 days", encoding="utf-8",

@@ -13,20 +13,24 @@
 
 ## 快速开始
 
+![图形界面](docs/images/gui-study.png)
+
 ### 方式一：下载 exe（不碰命令行）
 
 去 [Releases](https://github.com/skyslight1/zhs-ghost/releases) 下载，放进一个**单独的空文件夹**，双击。
 
-第一次运行会自动生成 `config.yaml`，**什么都不用改**，再运行一次就会打印二维码，
-用手机「知到」App 扫一下就开始刷课。
+第一次运行会自动生成 `config.yaml`，**什么都不用改**；再点一次「扫码登录」，
+手机「知到」App 扫一下，就可以点「开始学习」了。
 
 | 文件 | 说明 | 体积 |
 |---|---|---|
-| `zhs-ghost.exe` | 完整版：验证码自动识别，开箱即用 | ~200MB |
-| `zhs-ghost-lite.exe` | 精简版：遇到验证码浏览器自动打开，你滑一下 | ~24MB |
-| `*-windows-x64.zip` | 上面两个的压缩包，附带教程与示例配置 | — |
+| `zhs-ghost-gui.exe` | **图形界面** + 验证码自动识别 | ~200MB |
+| `zhs-ghost-lite-gui.exe` | **图形界面**，验证码浏览器自动打开、你滑一下 | ~25MB |
+| `zhs-ghost.exe` | 命令行版 + 验证码自动识别（给服务器 / 脚本用） | ~200MB |
+| `zhs-ghost-lite.exe` | 命令行精简版 | ~25MB |
+| `*-windows-x64.zip` | 上面某个的压缩包，附带教程与示例配置 | — |
 
-两个版本都不需要装 Python，也不需要装浏览器 —— 验证码中继会用系统自带的 Edge。
+四个版本都不需要装 Python，也不需要装浏览器 —— 验证码中继会用系统自带的 Edge。
 
 > Windows 首次运行可能弹「SmartScreen 已阻止」。点「更多信息」→「仍要运行」。
 > exe 没有代码签名证书，不是病毒。
@@ -39,17 +43,19 @@ cd zhs-ghost
 pip install -r requirements.txt
 python -m playwright install chromium    # 可选，用系统 Edge 也行
 
-python main.py --dry-run                 # 自检，不连网站
-python main.py --fetch                   # 拉课程清单
-python main.py -c 1919                   # 刷课
+python gui.py                            # 图形界面
+python main.py --dry-run                 # 命令行：自检，不连网站
+python main.py --fetch                   # 命令行：拉课程清单
+python main.py -c 1919                   # 命令行：刷课
 ```
 
 ### 📖 文档
 
 | 文档 | 内容 |
 |---|---|
-| [**使用教程**](docs/使用教程.md) | 从零到跑通，含配置文件逐项说明、场景配方、排错手册 |
+| [**使用教程**](docs/使用教程.md) | 图形界面 + 命令行，从零到跑通，含配置说明与排错手册 |
 | [打包说明](docs/打包说明.md) | 自己构建 exe、改打包配置 |
+| [README 第 4 节](#4-图形界面) | 界面各页的作用 |
 | [README 第 2 节](#2-触发根因对着源码逐条) | 为什么会弹人机验证（对着 fuckZHS 源码逐条分析） |
 
 ---
@@ -228,7 +234,38 @@ Guard 内部完成：唤浏览器 → 过检 → 回灌 cookie → 重新加密�
 
 ---
 
-## 4. 目录
+## 4. 图形界面
+
+双击 `zhs-ghost-gui.exe` 打开。四个页面：
+
+| 页面 | 作用 |
+|---|---|
+| **学习** | 账号状态、当前视频与进度条、开始 / 暂停 / 停止 |
+| **课程** | 课程列表，点第一列勾选；**双击某一行 = 只刷这一门** |
+| **配置** | 常用项做成表单，改完点保存；冷门项走「打开配置文件」 |
+| **日志** | 实时日志，按等级着色，可过滤 |
+
+![配置页](docs/images/gui-config.png)
+
+几个刻意的设计：
+
+- **打开程序不会自动开始**。否则你只是想看看，它已经在后台连发几小时上报了。
+- **停止是立即的**。一次会话休息可能是 40 分钟，直接 `sleep` 会让你点了停止还要干等。
+  `StudyRunner._rest()` 以 0.5 秒为粒度检查停止标志。
+- **暂停同理**，走同一个闸门 `observer.ControlObserver.gate()`。
+- **改配置不影响正在跑的任务**。App 已经拿着旧值，界面会提示「已生效于下次运行」。
+- **一个任务在跑时不让开第二个**。两个线程同时写 `state.json` 会把登录态和配额写坏。
+
+日志页：
+
+![日志页](docs/images/gui-log.png)
+
+> 用的是 Tkinter（Python 标准库），刻意没引 PySide6 —— 那会让 exe 多出 80MB。
+> 代价是得自己写样式，见 `zhsgo/gui/theme.py`。
+
+---
+
+## 5. 目录
 
 ```
 zhsgo/
@@ -261,7 +298,7 @@ zhsgo/
 
 ---
 
-## 5. 命令行
+## 6. 命令行
 
 参数沿用原项目，老用户不用重新学。exe 用户把 `python main.py` 整个替换成 `zhs-ghost.exe` 即可：
 
@@ -283,7 +320,7 @@ python main.py --install-browser                  # 下载 playwright chromium�
 
 ---
 
-## 6. 调参速查
+## 7. 调参速查
 
 | 症状 | 改哪里 |
 |---|---|
@@ -294,7 +331,7 @@ python main.py --install-browser                  # 下载 playwright chromium�
 | 服务器无显示器 | `relay.headless: true`，但无头指纹更差，建议配 `xvfb-run` |
 | 想看节拍是否真被打散 | `python main.py --budget`，会打出上报间隔直方图 |
 
-## 7. 怎么确认生效
+## 8. 怎么确认生效
 
 1. `--dry-run` 看首行指纹是 `Chrome/12x on Windows/macOS`，不是 `Chrome/0`；
 2. 抓一次包：`dateFormate` 毫秒位不该全是 `000`；UA 版本与 `sec-ch-ua` 一致；
@@ -305,10 +342,11 @@ python main.py --install-browser                  # 下载 playwright chromium�
 
 ---
 
-## 8. 测试
+## 9. 测试
 
 ```bash
-python tests/run_tests.py
+python tests/run_tests.py      # 核心：106 项，零依赖、不联网
+python tests/gui_smoke.py      # 界面：18 项，建窗口、切页、模拟进度
 ```
 
 106 项，零依赖、不联网、不登录。关键的是它**用假时钟把 300 秒的视频循环

@@ -35,17 +35,23 @@ jobs:
       - name: 单元自测（先证明源码是对的）
         run: python tests/run_tests.py
 
-      - name: 构建完整版 exe
-        run: python packaging/build.py full
+      - name: GUI 冒烟测试
+        run: python tests/gui_smoke.py
 
-      - name: 构建精简版 exe
-        run: python packaging/build.py lite
+      - name: 构建全部四个 exe
+        run: python packaging/build.py release
 
       - name: 检查产物
         shell: pwsh
         run: |
           Get-ChildItem dist | Format-Table Name, Length
-          foreach ($f in @("dist/zhs-ghost.exe", "dist/zhs-ghost-lite.exe")) {
+          $expected = @(
+            "dist/zhs-ghost-gui.exe",
+            "dist/zhs-ghost-lite-gui.exe",
+            "dist/zhs-ghost.exe",
+            "dist/zhs-ghost-lite.exe"
+          )
+          foreach ($f in $expected) {
             if (-not (Test-Path $f)) { throw "缺少产物 $f" }
             if ((Get-Item $f).Length -lt 1MB) { throw "$f 体积异常，可能没打进去依赖" }
           }
@@ -63,6 +69,8 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
+            dist/zhs-ghost-gui.exe
+            dist/zhs-ghost-lite-gui.exe
             dist/zhs-ghost.exe
             dist/zhs-ghost-lite.exe
             dist/*.zip

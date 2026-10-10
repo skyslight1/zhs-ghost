@@ -14,10 +14,17 @@ from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs
 
 VARIANT = os.environ.get("ZHS_VARIANT", "full").lower()
 ONEFILE = os.environ.get("ZHS_ONEFILE", "1") == "1"
-NAME = "zhs-ghost" if VARIANT == "full" else "zhs-ghost-lite"
+GUI = os.environ.get("ZHS_GUI", "0") == "1"
 
 # SPECPATH = 本文件所在目录（packaging/），仓库根是它的上级
 ROOT = os.path.dirname(os.path.abspath(SPECPATH))
+
+if VARIANT == "full":
+    NAME = "zhs-ghost-gui" if GUI else "zhs-ghost"
+else:
+    NAME = "zhs-ghost-lite-gui" if GUI else "zhs-ghost-lite"
+
+ENTRY = os.path.join(ROOT, "gui.py" if GUI else "main.py")
 
 
 def _need(rel):
@@ -104,7 +111,7 @@ else:
 
 # ------------------------------------------------------------------ 构建
 a = Analysis(
-    [os.path.join(ROOT, "main.py")],
+    [ENTRY],
     pathex=[ROOT],
     binaries=binaries,
     datas=datas,
@@ -127,7 +134,8 @@ _common = dict(
     # UPX 压缩会让 Windows Defender 误报率明显上升，宁可包大一点
     upx=False,
     upx_exclude=[],
-    console=True,
+    # GUI 版关掉控制台，避免双击时弹出一个黑框
+    console=not GUI,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,

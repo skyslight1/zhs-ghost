@@ -50,6 +50,13 @@ class BudgetExhausted(ZhsError):
     """
 
 
+class Stopped(ZhsError):
+    """用户主动停止（GUI 的停止按钮 / Ctrl+C）。
+
+    和 BudgetExhausted 一样属于"正常终止"，调用方应当安静收尾而不是报错。
+    """
+
+
 class TimeLimitExceeded(ZhsError):
     """单门课程的时限用尽。"""
 

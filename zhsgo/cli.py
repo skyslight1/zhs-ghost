@@ -221,6 +221,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--selfcheck", action="store_true",
                    help="检查各组件是否完好（打包版出问题时先跑这个）")
     p.add_argument("--dry-run", action="store_true", help="只打印配置与自检，不连网站")
+    p.add_argument("--gui", action="store_true", help="启动图形界面（等同 zhs-ghost-gui.exe）")
     p.add_argument("--budget", action="store_true", help="显示配额与风控统计后退出")
     p.add_argument("-d", "--debug", action="store_true", help="调试日志")
     p.add_argument("--json", action="store_true", help="清单以 JSON 输出")
@@ -309,6 +310,10 @@ def _run(argv: List[str]) -> int:
             pass
 
     args = build_parser().parse_args(argv)
+
+    if args.gui:
+        from .gui import launch
+        return launch(args.config)
 
     if args.install_browser:
         return install_browser()

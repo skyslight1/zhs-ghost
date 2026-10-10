@@ -181,6 +181,59 @@ class Config:
         if state_dir:
             os.makedirs(state_dir, exist_ok=True)
 
+    # ---------------------------------------------------------------- 保存
+
+    def to_dict(self) -> Dict[str, Any]:
+        """导出成可写回 yaml 的结构。
+
+        两个细节：
+          * 绝对路径要转回相对路径，否则配置换台机器就废了；
+          * tuple 必须转 list —— `yaml.safe_dump` 序列化不了 tuple。
+        """
+        from dataclasses import asdict
+
+        relay = _tuples_to_lists(asdict(self.relay))
+        relay["user_data_dir"] = self._relativize(relay.get("user_data_dir", ""))
+        relay["screenshot_dir"] = self._relativize(relay.get("screenshot_dir", ""))
+
+        log_cfg = asdict(self.log)
+        log_cfg["dir"] = self._relativize(log_cfg.get("dir", ""))
+
+        return {
+            "state_file": self._relativize(self.state_file),
+            "proxies": dict(self.proxies),
+            "timeout": self.timeout,
+            "auth": asdict(self.auth),
+            "fingerprint": self.fingerprint.to_dict(),
+            "pacer": _tuples_to_lists(asdict(self.pacer)),
+            "budget": _tuples_to_lists(asdict(self.budget)),
+            "guard": _tuples_to_lists(asdict(self.guard)),
+            "relay": relay,
+            "study": _tuples_to_lists(asdict(self.study)),
+            "ai": _tuples_to_lists(asdict(self.ai)),
+            "notify": asdict(self.notify),
+            "log": log_cfg,
+        }
+
+    def _relativize(self, value: str) -> str:
+        if not value:
+            return value
+        try:
+            rel = os.path.relpath(value, self.base_dir)
+        except Exception:
+            return value
+        # 爬到上级目录说明这个路径本来就不在项目内，保持绝对更安全
+        return value if rel.startswith("..") else rel.replace(os.sep, "/")
+
+    def save(self, path: Optional[str] = None) -> str:
+        target = path or self.config_path or os.path.join(self.base_dir, DEFAULT_CONFIG_NAME)
+        with open(target, "w", encoding="utf-8") as f:
+            f.write("# zhsgo 配置 —— 由图形界面 / 程序写回\n")
+            yaml.safe_dump(self.to_dict(), f, allow_unicode=True,
+                           sort_keys=False, default_flow_style=False)
+        self.config_path = target
+        return target
+
     # ---------------------------------------------------------------- 校验
 
     def validate(self) -> List[str]:
@@ -243,6 +296,17 @@ def _is_tuple_field(f) -> bool:
     if isinstance(tp, str):
         return tp.startswith("Tuple") or "tuple" in tp
     return getattr(tp, "__origin__", None) is tuple
+
+
+def _tuples_to_lists(value: Any) -> Any:
+    """递归把 tuple 转成 list —— yaml.safe_dump 序列化不了 tuple。"""
+    if isinstance(value, tuple):
+        return [_tuples_to_lists(v) for v in value]
+    if isinstance(value, dict):
+        return {k: _tuples_to_lists(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_tuples_to_lists(v) for v in value]
+    return value
 
 
 # ---------------------------------------------------------------- 首次运行

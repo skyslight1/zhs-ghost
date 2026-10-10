@@ -16,9 +16,10 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 from ..app import App
-from ..errors import BudgetExhausted, CaptchaRequired, TimeLimitExceeded, ZhsError
+from ..errors import BudgetExhausted, CaptchaRequired, Stopped, TimeLimitExceeded, ZhsError
 from ..logger import get as log
 from ..net import endpoints as ep
+from ..observer import PHASE_DONE, PHASE_REST, PHASE_STUDY, NullObserver, Observer, Progress
 from ..risk import WatchPoint
 from ..util import AttrDict, progress_bar, shorten
 
@@ -42,8 +43,9 @@ class HikeContext:
 
 
 class StudyRunner:
-    def __init__(self, app: App):
+    def __init__(self, app: App, observer: Optional[Observer] = None):
         self.app = app
+        self.observer: Observer = observer or NullObserver()
         self.cfg = app.cfg
         self.scfg = app.cfg.study
         self.clock = app.clock
@@ -88,8 +90,12 @@ class StudyRunner:
 
     def run_all(self) -> None:
         for c in self.list_courses():
+            if self.observer.should_stop():
+                raise Stopped("用户停止")
             try:
                 self.run_course(c["id"])
+            except Stopped:
+                raise
             except BudgetExhausted:
                 raise
             except Exception as e:
@@ -151,6 +157,8 @@ class StudyRunner:
                     self._tree_print(3, f"视频 {video.get('name')}")
                     try:
                         self.run_zhidao_video(ctx, video)
+                    except Stopped:
+                        raise
                     except TimeLimitExceeded as e:
                         log().warning(f"本课时限用尽，跳过剩余视频: {e}")
                         return
@@ -162,6 +170,8 @@ class StudyRunner:
                     except Exception as e:
                         log().error(f"视频 {video.get('videoId')} 处理失败: {e}")
         log().info(f"共享课完成：{name}")
+        self.observer.progress(Progress(phase=PHASE_DONE, course=name,
+                                        message=f"共享课完成：{name}"))
 
     # -------------------------------------------------------------- 单视频
 
@@ -178,7 +188,11 @@ class StudyRunner:
         rest = self.budget.before_video(rac)
         if rest > 0:
             log().warning(f"会话休息 {rest / 60:.0f} 分钟")
-            self.clock.sleep(rest)
+            self.observer.progress(Progress(
+                phase=PHASE_REST, course=self._course_name(ctx),
+                message=f"会话休息 {rest / 60:.0f} 分钟",
+                current=0, total=rest))
+            self._rest(rest)
 
         token = self.zhidao.learning_token(
             self.zhidao.prelearning_note(rac, video, ctx.course_id, ctx.recruit_id))
@@ -215,8 +229,18 @@ class StudyRunner:
 
         log().info(f"学习中 {shorten(str(video.get('name') or vid), 40)} | "
                    f"{played:.0f}/{total_sec:.0f}s | 目标 {end_time:.0f}s")
+        video_name = str(video.get("name") or vid)
+        course_name = self._course_name(ctx)
+        self.observer.progress(Progress(
+            phase=PHASE_STUDY, course=course_name, video=video_name,
+            message=f"开始 {video_name}", current=played, total=end_time))
 
         while played < end_time:
+            # 用户点的暂停/停止在这里生效，响应延迟不超过一个 tick
+            self.observer.gate()
+            if self.observer.should_stop():
+                raise Stopped("用户停止")
+
             # tick 时长本身带抖动：原实现的裸 sleep(1) 会把上报间隔量化成整数秒，
             # 抹掉本该存在的自然抖动
             tick = self.pacer.tick_seconds()
@@ -273,8 +297,18 @@ class StudyRunner:
                     prefix = "答题中"
                 progress_bar(played, end_time, prefix=prefix, suffix="完成")
 
+            self.observer.progress(Progress(
+                phase=PHASE_STUDY, course=course_name, video=video_name,
+                message=f"学习中 {video_name}",
+                current=played, total=end_time,
+                extra={"reported": last_submit, "idle": idle > 0, "quiz": quiz is not None}))
+
         if self.scfg.progress_view:
             progress_bar(end_time, end_time, prefix=f"完成 {vid}", suffix="")
+
+        self.observer.progress(Progress(
+            phase=PHASE_STUDY, course=course_name, video=video_name,
+            message=f"完成 {video_name}", current=end_time, total=end_time))
 
         self.clock.sleep(random.uniform(0.5, 2.0))
         # 更新本地进度，避免同一进程内重复处理时重刷
@@ -284,9 +318,35 @@ class StudyRunner:
         rest = self.pacer.rest_between_videos()
         if rest > 0.5:
             log().debug(f"视频间休息 {rest:.0f}s")
-            self.clock.sleep(rest)
+            self._rest(rest, course_name)
 
     # -------------------------------------------------------------- 辅助
+
+    def _course_name(self, ctx: ZhidaoContext) -> str:
+        return str(ctx.course.get("courseInfo", {}).get("name") or ctx.rac_id)
+
+    def _rest(self, seconds: float, course: str = "") -> None:
+        """可中断的休息。
+
+        直接 `clock.sleep(rest)` 的话，用户点了停止/暂停要等这段休息
+        走完才响应 —— 一次会话休息就是几十分钟，体验上等于卡死。
+        """
+        if seconds <= 0:
+            return
+        left = float(seconds)
+        step = 0.5
+        while left > 0:
+            self.observer.gate()
+            if self.observer.should_stop():
+                raise Stopped("用户停止（休息中）")
+            chunk = min(step, left)
+            self.clock.sleep(chunk)
+            left -= chunk
+            if course:
+                self.observer.progress(Progress(
+                    phase=PHASE_REST, course=course,
+                    message=f"休息中，剩余 {left / 60:.1f} 分钟",
+                    current=seconds - left, total=seconds))
 
     def _load_questions(self, ctx: ZhidaoContext, video: AttrDict,
                         played: float) -> List[AttrDict]:
@@ -376,6 +436,8 @@ class StudyRunner:
         for chapter in ctx.root:
             try:
                 self._hike_walk(ctx, chapter, 1)
+            except Stopped:
+                raise
             except TimeLimitExceeded as e:
                 log().warning(f"时限用尽: {e}")
                 return
@@ -385,8 +447,12 @@ class StudyRunner:
                 log().error(f"风控未解除: {e}")
                 return
         log().info(f"校内课 {course_id} 完成")
+        self.observer.progress(Progress(phase=PHASE_DONE, course=str(course_id),
+                                        message=f"校内课 {course_id} 完成"))
 
     def _hike_walk(self, ctx: HikeContext, node: AttrDict, depth: int) -> None:
+        if self.observer.should_stop():
+            raise Stopped("用户停止")
         children = node.get("childList")
         if children:
             self._tree_print(depth, f"章节 {node.get('name')}")
@@ -421,7 +487,7 @@ class StudyRunner:
         rest = self.budget.before_video(str(course_id))
         if rest > 0:
             log().warning(f"会话休息 {rest / 60:.0f} 分钟")
-            self.clock.sleep(rest)
+            self._rest(rest, str(course_id))
 
         info = self.hike.view_file(course_id, file_id)
         if self.scfg.prime_video:
@@ -439,6 +505,10 @@ class StudyRunner:
                    f"{played:.0f}/{total}s")
 
         while played < end_time:
+            self.observer.gate()
+            if self.observer.should_stop():
+                raise Stopped("用户停止")
+
             tick = self.pacer.tick_seconds()
             self.clock.sleep(tick)
             ctx.fucked_time += tick
@@ -466,7 +536,13 @@ class StudyRunner:
             if self.scfg.progress_view:
                 progress_bar(played, end_time, prefix=f"观看 {file_id}", suffix="完成")
 
+            self.observer.progress(Progress(
+                phase=PHASE_STUDY, course=str(course_id),
+                video=str(info.get("name") or file_id),
+                message=f"学习中 {info.get('name') or file_id}",
+                current=played, total=end_time))
+
         self.clock.sleep(random.uniform(0.5, 2.0))
         rest = self.pacer.rest_between_videos()
         if rest > 0.5:
-            self.clock.sleep(rest)
+            self._rest(rest, str(course_id))
