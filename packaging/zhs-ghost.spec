@@ -38,6 +38,7 @@ datas = []
 for rel, dest in (
     ("config.example.yaml", "."),
     ("README.md", "."),
+    ("DISCLAIMER.md", "."),
     ("LICENSE", "."),
     (os.path.join("docs", "使用教程.md"), "docs"),
 ):

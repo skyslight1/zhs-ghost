@@ -122,6 +122,8 @@ class MainWindow(tk.Tk):
         right.pack(side="right")
         ttk.Button(right, text="使用教程", style="Ghost.TButton",
                    command=self.open_docs).pack(side="right")
+        ttk.Button(right, text="免责声明", style="Ghost.TButton",
+                   command=self.open_disclaimer).pack(side="right", padx=(0, 4))
         ttk.Button(right, text="组件自检", style="Ghost.TButton",
                    command=self.action_selfcheck).pack(side="right", padx=(0, 4))
 
@@ -341,15 +343,25 @@ class MainWindow(tk.Tk):
         self._open_path(self.cfg.log.dir)
 
     def open_docs(self) -> None:
+        self._open_doc("docs/使用教程.md",
+                       "https://github.com/skyslight1/zhs-ghost/blob/main/docs/使用教程.md")
+
+    def open_disclaimer(self) -> None:
+        self._open_doc("DISCLAIMER.md",
+                       "https://github.com/skyslight1/zhs-ghost/blob/main/DISCLAIMER.md")
+
+    def _open_doc(self, relative: str, fallback_url: str) -> None:
+        """优先打开本地文件（打包时随包分发），找不到再回落到 GitHub。"""
         from ..paths import candidate_roots
 
+        names = (relative, os.path.basename(relative))
         for root in candidate_roots():
-            for name in (os.path.join("docs", "使用教程.md"), "使用教程.md"):
+            for name in names:
                 path = os.path.join(root, name)
                 if os.path.isfile(path):
                     self._open_path(path)
                     return
-        webbrowser.open("https://github.com/skyslight1/zhs-ghost/blob/main/docs/使用教程.md")
+        webbrowser.open(fallback_url)
 
     @staticmethod
     def _open_path(path: str) -> None:

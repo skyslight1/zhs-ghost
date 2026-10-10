@@ -361,6 +361,11 @@ def _bootstrap_config(target: str) -> None:
         print("默认使用【扫码登录】—— 账号密码留空即可直接运行。")
         print("只想先看它会做什么：")
         print("  zhs-ghost.exe --dry-run")
+        print("")
+        print("⚠  使用前请阅读 DISCLAIMER.md：本工具与智慧树平台、任何高校")
+        print("   均无关联，未获授权。自动化工具可能违反平台用户协议，并可能")
+        print("   导致账号被限制或封禁、学习记录被判定无效。")
+        print("   请只在你自己账号上使用，风险自负；禁止用于收费代刷等商业牟利。")
         print("=" * 68)
     except Exception as e:  # pragma: no cover
         print(f"[!] 生成默认配置失败: {e}")
