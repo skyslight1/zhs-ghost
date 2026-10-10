@@ -280,7 +280,8 @@ class MainWindow(tk.Tk):
             self.tab_study.set_account(bool(uid), uid)
             self._refresh_quota()
 
-        self._run_job("登录", job, running=False, on_done=done)
+        # running=True：扫码期间「停止」要保持可用，用户得能放弃这次登录
+        self._run_job("登录", job, running=True, on_done=done)
 
     def action_fetch(self) -> None:
         app = self._ensure_app()

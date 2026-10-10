@@ -32,7 +32,9 @@
 去 [Releases](https://github.com/skyslight1/zhs-ghost/releases) 下载，放进一个**单独的空文件夹**，双击。
 
 第一次运行会自动生成 `config.yaml`，**什么都不用改**；再点一次「扫码登录」，
-手机「知到」App 扫一下，就可以点「开始学习」了。
+会弹出一个独立窗口显示二维码，手机「知到」App 扫一下，就可以点「开始学习」了。
+
+![扫码登录](docs/images/gui-qr.png)
 
 | 文件 | 说明 | 体积 |
 |---|---|---|

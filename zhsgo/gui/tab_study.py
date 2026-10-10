@@ -65,12 +65,17 @@ class StudyTab(tk.Frame):
         self.lbl_detail.pack(fill="x")
 
         # ---------------------------------------------------------- 二维码
+        # 二维码用独立窗口显示（见 show_qr）。主界面里的面积不够，
+        # 240x240 的图会被 pack 压成 240x94 —— 看起来就像"没出二维码"。
+        # 这里只在主界面留一个状态行。
         self.qr_card = Card(self, "扫码登录")
-        self.qr_label = tk.Label(self.qr_card.body, bg=P["card"], bd=0)
-        self.qr_label.pack()
-        self.qr_hint = tk.Label(self.qr_card.body, text="用「知到」App 扫描上方二维码",
+        self.qr_hint = tk.Label(self.qr_card.body, text="等待扫码…",
                                 bg=P["card"], fg=P["muted"], font=fonts()["small"])
-        self.qr_hint.pack(pady=(6, 0))
+        self.qr_hint.pack(anchor="w")
+        # 主界面只留一行状态提示，二维码本体在独立窗口里
+        self.qr_card.pack(fill="x", padx=18, pady=6)
+        self._qr_window: Optional[tk.Toplevel] = None
+        self._qr_label: Optional[tk.Label] = None
 
         # ---------------------------------------------------------- 操作
         actions = tk.Frame(self, bg=P["bg"])
@@ -161,22 +166,96 @@ class StudyTab(tk.Frame):
     # ------------------------------------------------------------ 二维码
 
     def show_qr(self, image_bytes: bytes) -> None:
+        """用独立窗口显示二维码。
+
+        最早是把它当成主界面里的一张卡片。实测不行：主界面本来就装不下
+        （账号卡 142 + 任务卡 218 + 二维码 300 + 按钮行 50 > 可视 593），
+        pack 会把二维码压扁 —— 240x240 的图被压成 240x94，看起来就是
+        "点了扫码登录但没出二维码"。
+
+        独立窗口顺带解决两个问题：可以放得更大（380px，好扫），
+        也不跟主界面的布局互相抢空间。
+        """
         from .qr import to_photo
 
-        photo = to_photo(image_bytes, size=240)
+        photo = to_photo(image_bytes, size=380)
         if photo is None:
-            self.qr_hint.configure(text="二维码图片渲染失败，请改用命令行版扫码")
+            self.window.toast("二维码渲染失败，请改用命令行版扫码", "error")
+            self.qr_hint.configure(text="二维码渲染失败")
             return
-        self._qr_photo = photo
-        self.qr_label.configure(image=photo)
-        self.qr_hint.configure(text="用「知到」App 扫描上方二维码")
-        if not self.qr_card.winfo_ismapped():
-            self.qr_card.pack(fill="x", padx=18, pady=6)
+
+        win = self._qr_window
+        if win is None or not win.winfo_exists():
+            win = tk.Toplevel(self.window)
+            win.title("扫码登录 · zhs-ghost")
+            win.configure(bg=P["card"])
+            win.resizable(False, False)
+            win.transient(self.window)
+            win.protocol("WM_DELETE_WINDOW", self._on_qr_window_closed)
+
+            holder = tk.Frame(win, bg=P["card"])
+            holder.pack(padx=26, pady=22)
+
+            self._qr_label = tk.Label(holder, bg=P["card"], bd=0)
+            self._qr_label.pack()
+
+            self._qr_hint = tk.Label(holder, text="用手机「知到」App 扫描上方二维码",
+                                     bg=P["card"], fg=P["text"], font=fonts()["sub"])
+            self._qr_hint.pack(pady=(14, 2))
+            tk.Label(holder, text="扫码并在手机上确认后，本窗口会自动关闭",
+                     bg=P["card"], fg=P["muted"], font=fonts()["small"]).pack()
+
+            self._qr_window = win
+
+        self._qr_photo = photo          # 必须持引用，否则被 GC 后显示空白
+        self._qr_label.configure(image=photo)
+        # 注意：qr_hint（主界面状态行）和 _qr_hint（弹窗里的说明）
+        # 是两个不同对象，别写混
+        self._qr_hint.configure(text="用手机「知到」App 扫描上方二维码")
+        self.qr_hint.configure(text="二维码已打开，请在弹出的窗口中扫码", fg=P["text"])
+
+        win.deiconify()
+        win.lift()
+        try:
+            win.attributes("-topmost", True)
+        except Exception:
+            pass
+        self._center_qr_window()
+        win.update_idletasks()
+
+    def _center_qr_window(self) -> None:
+        win = self._qr_window
+        if win is None:
+            return
+        try:
+            win.update_idletasks()
+            w, h = win.winfo_reqwidth(), win.winfo_reqheight()
+            root = self.window
+            x = root.winfo_rootx() + (root.winfo_width() - w) // 2
+            y = root.winfo_rooty() + (root.winfo_height() - h) // 2
+            win.geometry(f"{w}x{h}+{max(x, 0)}+{max(y, 0)}")
+        except Exception:
+            pass
+
+    def _on_qr_window_closed(self) -> None:
+        """用户手动关掉二维码窗口 = 放弃这次登录。"""
+        self._qr_window = None
+        self._qr_photo = None
+        self.window.action_stop()
+        self.badge_account.set("未登录", "idle")
 
     def hide_qr(self) -> None:
-        self.qr_label.configure(image="")
+        if self._qr_window is not None:
+            try:
+                self._qr_window.destroy()
+            except Exception:
+                pass
+            self._qr_window = None
         self._qr_photo = None
-        self.qr_card.pack_forget()
+        try:
+            self.qr_hint.configure(text="等待扫码…", fg=P["muted"])
+        except Exception:
+            pass
 
     def _toggle_pause(self) -> None:
         if self._paused:
