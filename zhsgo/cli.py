@@ -70,6 +70,124 @@ def render_terminal_qr(image_bytes: bytes) -> None:
 
 # ---------------------------------------------------------------------- 参数
 
+def install_browser() -> int:
+    """下载 playwright 内置 chromium。
+
+    打包成 exe 后既没有 pip 也没有 playwright 命令行，只能走它内部的
+    driver 安装器。正常情况用不到 —— relay 默认优先用系统自带的 Edge。
+    """
+    print("=" * 68)
+    print("下载 playwright 内置 chromium")
+    print("提示：Windows 自带的 Edge 已经能直接用，通常不需要这一步。")
+    print("     只有 Edge 不可用（被卸载或损坏）时才需要装 chromium。")
+    print("=" * 68)
+    try:
+        from playwright._impl._driver import compute_driver_executable, get_driver_env
+    except Exception as e:
+        print(f"[!] 无法调用 playwright 安装器: {e}")
+        print("    源码运行请直接执行：python -m playwright install chromium")
+        return 1
+
+    try:
+        import subprocess
+
+        spec = compute_driver_executable()
+        if isinstance(spec, (tuple, list)):
+            node, cli = spec
+        else:
+            node, cli = None, spec
+        cmd = ([str(cli), "install", "chromium"] if node is None
+               else [str(node), str(cli), "install", "chromium"])
+        print(f"执行: {' '.join(cmd)}")
+        rc = subprocess.call(cmd, env=get_driver_env())
+        print("下载完成" if rc == 0 else f"[!] 安装器退出码 {rc}")
+        return rc
+    except Exception as e:
+        print(f"[!] 下载失败: {e}")
+        return 1
+
+
+def selfcheck() -> int:
+    """逐项检查打包是否完整 —— 打包版出问题时先跑这个。"""
+    from .paths import is_frozen, runtime_label, variant
+
+    v = variant()
+    print("=" * 68)
+    print(f"组件自检 · {runtime_label()} · variant={v}")
+    print("=" * 68)
+
+    checks = [
+        ("yaml", "配置解析"),
+        ("loguru", "日志"),
+        ("requests", "网络请求"),
+        ("Crypto.Cipher.AES", "请求加密"),
+        ("PIL.Image", "图片处理"),
+    ]
+    if v != "lite":
+        checks += [
+            ("playwright", "浏览器中继"),
+            ("playwright._impl._driver", "中继驱动"),
+            ("ddddocr", "验证码识别"),
+            ("cv2", "图像处理"),
+            ("onnxruntime", "OCR 推理引擎"),
+        ]
+
+    ok = True
+    for mod, desc in checks:
+        try:
+            __import__(mod)
+            print(f"  [ok]  {desc:<14} {mod}")
+        except Exception as e:
+            print(f"  [!!]  {desc:<14} {mod}  →  {e}")
+            ok = False
+
+    # 浏览器内核：打包版靠系统 Edge 才能开箱即用
+    print("-" * 68)
+    browsers = _detect_browsers()
+    if browsers:
+        for line in browsers:
+            print(f"  [ok]  系统浏览器     {line}")
+    else:
+        print("  [!!]  系统浏览器     没找到 Edge / Chrome")
+
+    if v != "lite":
+        try:
+            from playwright._impl._driver import compute_driver_executable  # noqa: F401
+            print("  [ok]  playwright 驱动可调用")
+        except Exception as e:
+            print(f"  [!!]  playwright 驱动不可用 → {e}")
+
+    print("=" * 68)
+    print("自检通过" if ok else "自检发现问题（见上方 [!!] 行）")
+    return 0 if ok else 1
+
+
+def _detect_browsers() -> List[str]:
+    candidates = {
+        "msedge": [
+            r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+            r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+        ],
+        "chrome": [
+            r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+            r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+        ],
+    }
+    found: List[str] = []
+    for name, paths in candidates.items():
+        for p in paths:
+            if os.path.exists(p):
+                found.append(f"{name} → {p}")
+                break
+    if not found:
+        import shutil as _sh
+        for exe in ("msedge", "chrome", "chromium"):
+            p = _sh.which(exe)
+            if p:
+                found.append(f"{exe} → {p}")
+    return found
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="zhsgo",
@@ -98,6 +216,10 @@ def build_parser() -> argparse.ArgumentParser:
                    help="刷 AI 课程")
     p.add_argument("--no-exam", action="store_true", help="AI 课程只刷视频不做题")
     p.add_argument("--no-relay", action="store_true", help="关闭验证码中继")
+    p.add_argument("--install-browser", action="store_true",
+                   help="下载 playwright 内置 chromium（一般用不到，系统 Edge 可直接用）")
+    p.add_argument("--selfcheck", action="store_true",
+                   help="检查各组件是否完好（打包版出问题时先跑这个）")
     p.add_argument("--dry-run", action="store_true", help="只打印配置与自检，不连网站")
     p.add_argument("--budget", action="store_true", help="显示配额与风控统计后退出")
     p.add_argument("-d", "--debug", action="store_true", help="调试日志")
@@ -129,11 +251,23 @@ def apply_cli_overrides(cfg: Config, args: argparse.Namespace) -> None:
 
 # ---------------------------------------------------------------------- 主流程
 
-def print_config(cfg: Config, problems: List[str]) -> None:
+def print_config(cfg: Config, problems: List[str], mode: str = "") -> None:
+    from .paths import variant
+
+    if not cfg.relay.enabled:
+        relay_line = "关闭"
+    elif variant() == "lite":
+        relay_line = "开启（精简版：验证码需手动滑）"
+    elif cfg.relay.headless:
+        relay_line = "开启（无头浏览器）"
+    else:
+        relay_line = "开启（有头浏览器，可自动识别）"
+
     lines = [
         "=" * 72,
-        f"zhsgo {__version__}",
+        f"zhsgo {__version__}" + (f"  [{mode}]" if mode else ""),
         "-" * 72,
+        f"  配置文件      {cfg.config_path or '(内置默认)'}",
         f"  状态文件      {cfg.state_file}",
         f"  代理          {cfg.proxies or '（直连）'}",
         f"  指纹          {cfg.fingerprint.describe() if hasattr(cfg.fingerprint, 'describe') else cfg.fingerprint}",
@@ -146,8 +280,7 @@ def print_config(cfg: Config, problems: List[str]) -> None:
         f"  会话纪律      单次 {cfg.budget.session_minutes[0]:.0f}~{cfg.budget.session_minutes[1]:.0f} 分钟，"
         f"休息 {cfg.budget.rest_minutes[0]:.0f}~{cfg.budget.rest_minutes[1]:.0f} 分钟",
         f"  单日上限      {cfg.budget.daily_minutes:.0f} 分钟 / {cfg.budget.daily_sessions} 次会话",
-        f"  验证码中继    {'开启' if cfg.relay.enabled else '关闭'}"
-        f"{'（有头浏览器）' if cfg.relay.enabled and not cfg.relay.headless else ''}",
+        f"  验证码中继    {relay_line}",
         f"  AI 作答       {'开启，后端=' + cfg.ai.backend if cfg.ai.enabled else '关闭'}",
         "=" * 72,
     ]
@@ -162,13 +295,31 @@ def print_config(cfg: Config, problems: List[str]) -> None:
         print("配置自检通过\n")
 
 
-def main(argv: Optional[List[str]] = None) -> int:
+def _run(argv: List[str]) -> int:
     stderr_safe()
+
+    from .paths import app_root, is_frozen, runtime_label
+
+    if is_frozen():
+        # 打包后双击启动时 cwd 可能是 system32 或无权限目录，
+        # 必须切到 exe 所在目录，配置文件才好找
+        try:
+            os.chdir(app_root())
+        except Exception:
+            pass
+
     args = build_parser().parse_args(argv)
+
+    if args.install_browser:
+        return install_browser()
+
+    if args.selfcheck:
+        return selfcheck()
+
     cfg = Config.load(args.config)
     apply_cli_overrides(cfg, args)
     problems = cfg.validate()
-    print_config(cfg, problems)
+    print_config(cfg, problems, runtime_label())
 
     if args.dry_run:
         print("dry-run 结束（没有连接任何服务）")
@@ -240,6 +391,22 @@ def _maybe_int(value: str) -> Any:
         return int(value)
     except (TypeError, ValueError):
         return value
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    from .paths import is_frozen
+
+    raw = list(sys.argv[1:] if argv is None else argv)
+    code = _run(raw)
+
+    # 双击运行时控制台窗口会随进程退出立刻关闭 —— 出错的话用户根本
+    # 没机会看到原因。带参数调用（脚本、CI）时不阻塞。
+    if not raw and is_frozen():
+        try:
+            input("\n（按回车键关闭窗口）")
+        except Exception:
+            pass
+    return code
 
 
 if __name__ == "__main__":

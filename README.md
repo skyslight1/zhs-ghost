@@ -9,15 +9,48 @@
 
 **核心差别：原项目把"人机验证"当成需要打补丁的意外，这份实现把它当成必然会发生的事件，直接设计进请求层。**
 
+---
+
+## 快速开始
+
+### 方式一：下载 exe（不碰命令行）
+
+去 [Releases](https://github.com/skyslight1/zhs-ghost/releases) 下载，放进一个**单独的空文件夹**，双击。
+
+第一次运行会自动生成 `config.yaml`，**什么都不用改**，再运行一次就会打印二维码，
+用手机「知到」App 扫一下就开始刷课。
+
+| 文件 | 说明 | 体积 |
+|---|---|---|
+| `zhs-ghost.exe` | 完整版：验证码自动识别，开箱即用 | ~200MB |
+| `zhs-ghost-lite.exe` | 精简版：遇到验证码浏览器自动打开，你滑一下 | ~24MB |
+| `*-windows-x64.zip` | 上面两个的压缩包，附带教程与示例配置 | — |
+
+两个版本都不需要装 Python，也不需要装浏览器 —— 验证码中继会用系统自带的 Edge。
+
+> Windows 首次运行可能弹「SmartScreen 已阻止」。点「更多信息」→「仍要运行」。
+> exe 没有代码签名证书，不是病毒。
+
+### 方式二：源码运行
+
 ```bash
-pip install -r requirements.txt          # 或 pip install -e .
-python -m playwright install chromium    # 可选但强烈建议
-cp config.example.yaml config.yaml
+git clone https://github.com/skyslight1/zhs-ghost.git
+cd zhs-ghost
+pip install -r requirements.txt
+python -m playwright install chromium    # 可选，用系统 Edge 也行
 
 python main.py --dry-run                 # 自检，不连网站
 python main.py --fetch                   # 拉课程清单
 python main.py -c 1919                   # 刷课
 ```
+
+### 📖 文档
+
+| 文档 | 内容 |
+|---|---|
+| [**使用教程**](docs/使用教程.md) | 从零到跑通，含配置文件逐项说明、场景配方、排错手册 |
+| [打包说明](docs/打包说明.md) | 自己构建 exe、改打包配置 |
+| [README 第 2 节](#2-触发根因对着源码逐条) | 为什么会弹人机验证（对着 fuckZHS 源码逐条分析） |
 
 ---
 
@@ -201,6 +234,13 @@ Guard 内部完成：唤浏览器 → 过检 → 回灌 cookie → 重新加密�
 zhsgo/
 ├── main.py                      CLI 入口
 ├── config.example.yaml          全量注释配置
+├── packaging/
+│   ├── build.py                 一键打包脚本（自动自检）
+│   ├── zhs-ghost.spec           PyInstaller 配置（full / lite 双变体）
+│   └── version_info.txt         exe 版本信息
+├── docs/
+│   ├── 使用教程.md               从零到跑通 + 排错手册
+│   └── 打包说明.md               自己构建 exe
 ├── zhsgo/
 │   ├── clock.py                 可替换时钟（测试用假时钟跑完整循环）
 │   ├── config.py                yaml → dataclass
@@ -223,7 +263,7 @@ zhsgo/
 
 ## 5. 命令行
 
-参数沿用原项目，老用户不用重新学：
+参数沿用原项目，老用户不用重新学。exe 用户把 `python main.py` 整个替换成 `zhs-ghost.exe` 即可：
 
 ```bash
 python main.py -c <courseId|recruitAndCourseId>   # 刷指定课
@@ -234,7 +274,10 @@ python main.py -s 1.25 -t 0.95 -l 25              # 速度/阈值/单课时限
 python main.py --no-relay                         # 关掉中继（只想看多久被拦时有用）
 python main.py --budget                           # 看配额与节拍分布
 python main.py --dry-run                          # 只自检
+python main.py --install-browser                  # 下载 playwright chromium（通常用不到）
 ```
+
+**双击 exe 不带任何参数** = 登录后自动处理全部课程。这是设计好的默认行为。
 
 课程 ID 在网址里：共享课看 `recruitAndCourseId`（带字母），校内课看 `courseId`（纯数字）。
 

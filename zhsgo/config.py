@@ -94,6 +94,7 @@ class LogConfig:
 @dataclass
 class Config:
     base_dir: str = "."
+    config_path: str = ""
     state_file: str = "./state/state.json"
     proxies: Dict[str, str] = field(default_factory=dict)
     timeout: float = 15.0
@@ -113,13 +114,19 @@ class Config:
 
     @classmethod
     def load(cls, path: Optional[str] = None) -> "Config":
-        path = path or os.path.join(os.getcwd(), DEFAULT_CONFIG_NAME)
+        from .paths import app_root, find_resource
+
+        path = path or os.path.join(app_root(), DEFAULT_CONFIG_NAME)
+        if not os.path.isfile(path):
+            _bootstrap_config(path)
         data: Dict[str, Any] = {}
         if os.path.isfile(path):
             with open(path, "r", encoding="utf-8") as f:
                 data = yaml.safe_load(f) or {}
         base = os.path.dirname(os.path.abspath(path))
-        return cls.from_dict(data, base)
+        cfg = cls.from_dict(data, base)
+        cfg.config_path = path
+        return cfg
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any], base_dir: str = ".") -> "Config":
@@ -187,14 +194,21 @@ class Config:
         if self.ai.enabled and self.ai.backend == "openai" and not self.ai.openai.api_key:
             problems.append("ai.backend=openai 但未填 api_key")
         if self.relay.enabled:
-            try:
-                import playwright  # noqa: F401
-            except ImportError:
-                problems.append("relay.enabled=true 但未安装 playwright（pip install playwright）")
-            try:
-                import ddddocr  # noqa: F401
-            except ImportError:
-                problems.append("relay.enabled=true 但未安装 ddddocr（pip install ddddocr）")
+            from .paths import variant
+
+            # 精简版是**故意**不带 ddddocr / playwright 自动识别的，
+            # 不该被报成"缺依赖"
+            if variant() == "lite":
+                pass
+            else:
+                try:
+                    import playwright  # noqa: F401
+                except ImportError:
+                    problems.append("relay.enabled=true 但未安装 playwright（pip install playwright）")
+                try:
+                    import ddddocr  # noqa: F401
+                except ImportError:
+                    problems.append("relay.enabled=true 但未安装 ddddocr（pip install ddddocr）")
         return problems
 
 
@@ -229,3 +243,61 @@ def _is_tuple_field(f) -> bool:
     if isinstance(tp, str):
         return tp.startswith("Tuple") or "tuple" in tp
     return getattr(tp, "__origin__", None) is tuple
+
+
+# ---------------------------------------------------------------- 首次运行
+
+_FALLBACK_CONFIG = """\
+# zhsgo 最小配置（首次运行自动生成）
+# 带完整注释的版本见仓库里的 config.example.yaml
+state_file: "./state/state.json"
+auth:
+  use_qr: true
+  save_cookies: true
+pacer:
+  max_speed: 1.5
+  default_speed: 1.25
+  report_interval: [22, 47]
+budget:
+  daily_minutes: 250
+  daily_sessions: 4
+relay:
+  enabled: true
+  headless: false
+"""
+
+
+def _bootstrap_config(target: str) -> None:
+    """首次运行：生成 config.yaml，做到真正开箱即用。
+
+    不直接复制文件，而是读内容后重新写出 —— 打包版的示例文件位于
+    PyInstaller 的解压目录，那个路径随时可能失效。
+    """
+    from .paths import find_resource
+
+    text = ""
+    example = find_resource("config.example.yaml")
+    if example:
+        try:
+            with open(example, "r", encoding="utf-8") as f:
+                text = f.read()
+        except Exception:
+            text = ""
+    if not text.strip():
+        text = _FALLBACK_CONFIG
+
+    try:
+        os.makedirs(os.path.dirname(os.path.abspath(target)) or ".", exist_ok=True)
+        with open(target, "w", encoding="utf-8") as f:
+            f.write(text)
+        print("=" * 68)
+        print("未找到配置文件，已生成默认配置：")
+        print(f"  {target}")
+        print("")
+        print("默认使用【扫码登录】—— 账号密码留空即可直接运行。")
+        print("只想先看它会做什么：")
+        print("  zhs-ghost.exe --dry-run")
+        print("=" * 68)
+    except Exception as e:  # pragma: no cover
+        print(f"[!] 生成默认配置失败: {e}")
+

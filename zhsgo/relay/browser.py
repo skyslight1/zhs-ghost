@@ -35,7 +35,10 @@ from ..util import merge_cookies
 class RelayConfig:
     enabled: bool = True
     headless: bool = False
-    channel: str = ""                       # "" = playwright 自带 chromium
+    channel: str = ""                       # "" = 自动挑选；也可填 msedge / chrome
+    # 自动挑选时，优先用系统自带的 Edge / Chrome 内核。
+    # 打包成 exe 后没有 `playwright install` 这一步，靠系统内核才能开箱即用。
+    prefer_system_browser: bool = True
     user_data_dir: str = "./state/browser_profile"
     screenshot_dir: str = "./logs/shots"
     wait_captcha_seconds: float = 75.0
@@ -110,6 +113,53 @@ class BrowserRelay:
             raise box["e"]
         return bool(box.get("r"))
 
+    # ---------------------------------------------------------------- 启动
+
+    def channel_chain(self) -> List[Optional[str]]:
+        if self.cfg.channel:
+            return [self.cfg.channel]
+        if self.cfg.prefer_system_browser:
+            # Windows 10/11 一定自带 Edge；配上就知道为什么打包成 exe 后
+            # 不需要 `playwright install chromium` 也能开箱即用
+            return ["msedge", "chrome", None]
+        return [None]
+
+    async def _launch(self, p):
+        """按候选顺序试浏览器内核，返回 (context, channel)。"""
+        from .stealth import ANTI_THROTTLE_ARGS, IGNORE_DEFAULT_ARGS
+
+        base: Dict[str, Any] = dict(
+            user_data_dir=self.cfg.user_data_dir,
+            headless=self.cfg.headless,
+            viewport={"width": 1440, "height": 900},
+            locale="zh-CN",
+            timezone_id="Asia/Shanghai",
+            args=ANTI_THROTTLE_ARGS,
+            ignore_default_args=IGNORE_DEFAULT_ARGS,
+        )
+        failures: List[str] = []
+        for channel in self.channel_chain():
+            kwargs = dict(base)
+            if channel:
+                kwargs["channel"] = channel
+            try:
+                ctx = await p.chromium.launch_persistent_context(**kwargs)
+                logger.info(f"浏览器内核：{channel or 'playwright 内置 chromium'}")
+                return ctx, channel
+            except Exception as e:
+                failures.append(f"{channel or 'chromium'} → {_brief(e)}")
+
+        logger.error(
+            "浏览器内核全部启动失败：\n  " + "\n  ".join(failures)
+            + "\n\n排查建议：\n"
+              "  1) Windows 自带 Edge 正常应该能直接用；失败说明 Edge 被卸载或损坏\n"
+              "  2) 想改用 playwright 内置 chromium：\n"
+              "       源码版  python -m playwright install chromium\n"
+              "       exe 版   zhs-ghost.exe --install-browser\n"
+              "  3) 也可以先把 relay.enabled 改成 false，暂时跳过自动过验证码"
+        )
+        return None, None
+
     # ---------------------------------------------------------------- 主流程
 
     async def _unlock(self, http: Any, rac_id: Optional[str]) -> bool:
@@ -131,20 +181,10 @@ class BrowserRelay:
         cookies = to_playwright_cookies(http.cookies)
         logger.warning(f"启动浏览器过验证码（注入 {len(cookies)} 个 cookie）")
 
-        launch_kwargs: Dict[str, Any] = dict(
-            user_data_dir=self.cfg.user_data_dir,
-            headless=self.cfg.headless,
-            viewport={"width": 1440, "height": 900},
-            locale="zh-CN",
-            timezone_id="Asia/Shanghai",
-            args=ANTI_THROTTLE_ARGS,
-            ignore_default_args=IGNORE_DEFAULT_ARGS,
-        )
-        if self.cfg.channel:
-            launch_kwargs["channel"] = self.cfg.channel
-
         async with async_playwright() as p:
-            ctx = await p.chromium.launch_persistent_context(**launch_kwargs)
+            ctx, _used = await self._launch(p)
+            if ctx is None:
+                return False
             try:
                 await ctx.add_init_script(STEALTH_JS)
                 if cookies:
@@ -284,6 +324,11 @@ def _extract_uuid(jar) -> Optional[str]:
     except Exception:
         pass
     return None
+
+
+def _brief(exc: Exception, limit: int = 90) -> str:
+    text = str(exc).replace("\n", " ").strip()
+    return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
 def _beep(freq: int, duration: int, times: int) -> None:
