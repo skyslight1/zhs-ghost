@@ -68,7 +68,10 @@ hiddenimports = [
 
 # ------------------------------------------------------------------ 排除项
 excludes = [
-    "tkinter",
+    # 注意：**不要排除 tkinter**。
+    # GUI 版当然需要它；CLI 版也支持 `--gui`，同样需要。
+    # 之前为了省 8MB 把它 exclude 掉，结果所有 exe 一开窗口就是
+    # "No module named 'tkinter'"。
     "matplotlib",
     "pandas",
     "scipy",

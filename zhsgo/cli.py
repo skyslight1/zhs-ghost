@@ -122,6 +122,11 @@ def selfcheck() -> int:
         ("requests", "网络请求"),
         ("Crypto.Cipher.AES", "请求加密"),
         ("PIL.Image", "图片处理"),
+        # GUI 版必须要它，命令行版的 --gui 也要。
+        # 这条曾经漏掉：spec 里把 tkinter exclude 掉了，而自检走的又是
+        # 命令行分支（根本不 import tkinter），于是全绿通过、用户一开就崩。
+        ("tkinter", "图形界面"),
+        ("tkinter.ttk", "界面控件"),
     ]
     if v != "lite":
         checks += [

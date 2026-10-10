@@ -113,29 +113,97 @@ def build_one(variant: str, gui: bool, onefile: bool) -> Tuple[str, float]:
 
 
 def self_test(variant: str, gui: bool, onefile: bool) -> bool:
+    """打包后必须真的把程序跑起来。
+
+    ⚠️ 这里踩过一次大坑：GUI 版原先只跑 `--selfcheck`，而那条路径走的是
+    命令行分支，**根本不 import tkinter**。于是 tkinter 被 exclude 掉了
+    都没发现 —— 自检全绿，用户一下载就是一屏 traceback。
+
+    所以 GUI 版现在做的是"真的启动它，看窗口进程能不能活下来"。
+    """
     name = exe_name(variant, gui)
     exe = os.path.join(DIST, f"{name}.exe") if onefile else os.path.join(DIST, name, f"{name}.exe")
     if not os.path.exists(exe):
         print(f"  [!!] 找不到 {exe}")
         return False
 
-    # GUI 版是 windowed，没有 stdout，抓不到输出 —— 只看退出码。
-    # 它跑的是 --selfcheck（逐项验证依赖和浏览器内核），比 --dry-run 更全面。
-    args = ["--selfcheck"] if gui else ["--dry-run"]
-    print(f"\n自检 {os.path.basename(exe)} ({' '.join(args)}) ...")
     tmp = tempfile.mkdtemp(prefix="zhsgo-selftest-")
+    try:
+        if gui:
+            ok = _test_gui_launch(exe, tmp)
+            # 顺带跑一次组件自检（覆盖依赖、浏览器内核）
+            ok = _test_cli_run(exe, tmp, ["--selfcheck"], "自检通过") and ok
+        else:
+            ok = _test_cli_run(exe, tmp, ["--dry-run"], "dry-run 结束")
+        return ok
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+        for junk in ("config.yaml", "state", "logs", "courses.json"):
+            p = os.path.join(DIST, junk)
+            if os.path.isdir(p):
+                shutil.rmtree(p, ignore_errors=True)
+            elif os.path.exists(p):
+                os.remove(p)
+
+
+def _test_gui_launch(exe: str, cwd: str, wait: float = 12.0) -> bool:
+    """启动 GUI，确认它在若干秒后仍然活着（= 窗口真的开起来了）。
+
+    windowed exe 没有 stdout，抓不到 traceback，所以只能靠"进程有没有
+    提前退出"来判断。
+    """
+    print(f"\n自检 {os.path.basename(exe)}（真实启动窗口，观察 {wait:.0f}s）...")
+    t0 = time.time()
+    try:
+        proc = subprocess.Popen(
+            [exe], cwd=cwd,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, encoding="utf-8", errors="replace",
+        )
+    except Exception as e:
+        print(f"  [!!] 无法启动: {e}")
+        return False
+
+    try:
+        deadline = time.time() + wait
+        while time.time() < deadline:
+            if proc.poll() is not None:
+                out = ""
+                try:
+                    out = proc.stdout.read() if proc.stdout else ""
+                except Exception:
+                    pass
+                print(f"  [!!] 进程在 {time.time() - t0:.1f}s 后退出了，"
+                      f"退出码 {proc.returncode}")
+                for line in (out or "").strip().splitlines()[-16:]:
+                    print(f"  | {line}")
+                print("  → 窗口版最常见的两种原因：")
+                print("     · tkinter 没打进去（检查 spec 的 excludes）")
+                print("     · 缺 tcl/tk 数据文件")
+                return False
+            time.sleep(0.4)
+        print(f"  [ok] {wait:.0f}s 后进程仍在运行 —— 窗口已打开")
+        return True
+    finally:
+        if proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=8)
+            except Exception:
+                proc.kill()
+
+
+def _test_cli_run(exe: str, cwd: str, args: list, marker: str) -> bool:
+    print(f"\n自检 {os.path.basename(exe)} ({' '.join(args)}) ...")
     t0 = time.time()
     try:
         proc = subprocess.run(
-            [exe] + args, cwd=tmp,
+            [exe] + args, cwd=cwd,
             capture_output=True, text=True, encoding="utf-8", errors="replace",
             timeout=900,
         )
         out = (proc.stdout or "") + (proc.stderr or "")
-        if gui:
-            ok = proc.returncode == 0
-        else:
-            ok = proc.returncode == 0 and "dry-run 结束" in out
+        ok = proc.returncode == 0 and marker in out
         print(f"  退出码 {proc.returncode}，用时 {time.time() - t0:.1f}s")
         for line in out.strip().splitlines()[:14]:
             print(f"  | {line}")
@@ -147,14 +215,6 @@ def self_test(variant: str, gui: bool, onefile: bool) -> bool:
     except Exception as e:
         print(f"  [!!] 自检异常: {e}")
         return False
-    finally:
-        shutil.rmtree(tmp, ignore_errors=True)
-        for junk in ("config.yaml", "state", "logs", "courses.json"):
-            p = os.path.join(DIST, junk)
-            if os.path.isdir(p):
-                shutil.rmtree(p, ignore_errors=True)
-            elif os.path.exists(p):
-                os.remove(p)
 
 
 def make_zip(variant: str, gui: bool, onefile: bool) -> str:
