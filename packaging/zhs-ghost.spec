@@ -40,13 +40,17 @@ for rel, dest in (
     ("README.md", "."),
     ("DISCLAIMER.md", "."),
     ("LICENSE", "."),
-    (os.path.join("docs", "使用教程.md"), "docs"),
 ):
     if _need(rel):
         datas.append((os.path.join(ROOT, rel), dest))
 
-if os.path.isdir(os.path.join(ROOT, "docs")):
-    datas.append((os.path.join(ROOT, "docs"), "docs"))
+# docs 下的 markdown 要打进 exe（GUI 的「使用教程」按钮要打开它），
+# 但 docs/images/ 不要 —— 截图只给仓库和 README 用。
+# 一开始整个 docs 都打进去了，结果是截图随每个 exe 一起分发出去。
+for _name in ("使用教程.md", "打包说明.md"):
+    _p = os.path.join(ROOT, "docs", _name)
+    if os.path.isfile(_p):
+        datas.append((_p, "docs"))
 
 binaries = []
 
