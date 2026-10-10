@@ -82,8 +82,33 @@ def check_env(variant: str) -> List[str]:
     return problems
 
 
+def kill_stale(name: str) -> int:
+    """构建前杀掉同名的残留进程。
+
+    Windows 上正在运行的 exe 会锁住文件，PyInstaller 覆盖时会直接
+    `PermissionError: [WinError 5] 拒绝访问`。
+
+    自检阶段会真的把 GUI 启动起来，如果那个进程没被完全回收
+    （比如被强杀、或者用户在别处开着），下一次构建就撞上了。
+    这里统一清一遍，省得每次都要手动去任务管理器里找。
+    """
+    if sys.platform != "win32":
+        return 0
+    try:
+        proc = subprocess.run(["taskkill", "/F", "/T", "/IM", f"{name}.exe"],
+                              capture_output=True, text=True)
+        if proc.returncode == 0:
+            print(f"  （已清理残留的 {name}.exe 进程）")
+            return 1
+    except Exception:
+        pass
+    return 0
+
+
 def build_one(variant: str, gui: bool, onefile: bool) -> Tuple[str, float]:
     name = exe_name(variant, gui)
+    kill_stale(name)
+
     env = os.environ.copy()
     env["ZHS_VARIANT"] = variant
     env["ZHS_ONEFILE"] = "1" if onefile else "0"
@@ -131,6 +156,10 @@ def self_test(variant: str, gui: bool, onefile: bool) -> bool:
     try:
         if gui:
             ok = _test_gui_launch(exe, tmp)
+            # 再走一遍用户真正会走的路：点「扫码登录」→ App 初始化。
+            # App 初始化里的 loguru 自递归就是在这条路上炸的，
+            # 只开个窗口是测不出来的。
+            ok = _test_gui_login(exe, tmp) and ok
             # 顺带跑一次组件自检（覆盖依赖、浏览器内核）
             ok = _test_cli_run(exe, tmp, ["--selfcheck"], "自检通过") and ok
         else:
@@ -191,6 +220,43 @@ def _test_gui_launch(exe: str, cwd: str, wait: float = 12.0) -> bool:
                 proc.wait(timeout=8)
             except Exception:
                 proc.kill()
+
+
+def _test_gui_login(exe: str, cwd: str) -> bool:
+    """让 exe 自己点一次「扫码登录」，确认窗口不卡死。
+
+    走的是用户真实路径：GUI 启动 → `_ensure_app()` 构造 App →
+    `setup_logging()` 把 sys.stderr 注册成 loguru sink → 拉二维码。
+
+    这里炸过一次：`_StreamProxy` 把 stderr 写入转发给 loguru，和
+    stderr sink 互相触发，无限递归，用户点一下按钮窗口就未响应。
+    源码级测试覆盖不到打包环境，所以必须对着真 exe 跑一遍。
+    """
+    script = os.path.join(ROOT, "tests", "check_gui_login_no_hang.py")
+    if not os.path.isfile(script):
+        print("  [--] 跳过登录点击测试（找不到脚本）")
+        return True
+
+    print(f"\n自检 {os.path.basename(exe)}（自动点击「扫码登录」）...")
+    try:
+        proc = subprocess.run(
+            [sys.executable, script, exe],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=240,
+        )
+        for line in (proc.stdout or "").strip().splitlines():
+            print(f"  | {line}")
+        for line in (proc.stderr or "").strip().splitlines()[-6:]:
+            print(f"  | {line}")
+        ok = proc.returncode == 0
+        print("  自检通过" if ok else "  自检失败")
+        return ok
+    except subprocess.TimeoutExpired:
+        print("  [!!] 超时 —— 窗口大概率卡死了")
+        return False
+    except Exception as e:
+        print(f"  [!!] 异常: {e}")
+        return False
 
 
 def _test_cli_run(exe: str, cwd: str, args: list, marker: str) -> bool:

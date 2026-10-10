@@ -89,6 +89,17 @@ class MainWindow(tk.Tk):
         self.tab_config.reload()
         self._autostart_id: Optional[str] = self.after(120, self._autostart)
 
+        # ---------------------------------------------------------------
+        # 自动化测试钩子。
+        #
+        # 打包后必须能验证"点扫码登录不会卡死"这条真实路径 —— 之前 App
+        # 初始化里的 loguru 递归就是在这条路上炸的，而源码级测试覆盖不到
+        # 打包环境。设了这个环境变量，启动 2.5 秒后自动点一次按钮；
+        # 手动使用永远不触发。
+        # ---------------------------------------------------------------
+        if os.environ.get("ZHS_AUTOTEST_LOGIN"):
+            self.after(2500, self.action_login)
+
     def _on_destroy(self, event: Any) -> None:
         if event.widget is not self:
             return
@@ -328,16 +339,37 @@ class MainWindow(tk.Tk):
         self.set_status("已继续", "running", sticky=True)
 
     def action_selfcheck(self) -> None:
+        """组件自检。
+
+        必须放后台线程：它会 import playwright / ddddocr（几百毫秒起步），
+        还会 print 几十行输出。在主线程里跑同样会让窗口卡住。
+        输出重定向到日志页，否则 windowed exe 里用户什么都看不到。
+        """
+        import io
+        from contextlib import redirect_stdout
+
         from ..cli import selfcheck as run_selfcheck
 
         self.notebook.select(self.tab_log)
-        try:
-            code = run_selfcheck()
-        except Exception as e:
-            self.toast(f"自检失败：{e}", "error")
-            return
-        self.set_status("组件自检通过" if code == 0 else "组件自检发现问题（见日志）",
-                        "ok" if code == 0 else "error")
+
+        def job() -> int:
+            buf = io.StringIO()
+            code = 1
+            try:
+                with redirect_stdout(buf):
+                    code = run_selfcheck()
+            except Exception as e:
+                buf.write(f"[!] 自检异常: {e}")
+            for line in buf.getvalue().splitlines():
+                self.bridge.post(self.tab_log.append, line, "INFO")
+            return code
+
+        def done(code: Any) -> None:
+            ok = code == 0
+            self.set_status("组件自检通过" if ok else "组件自检发现问题（见日志）",
+                            "ok" if ok else "error")
+
+        self._run_job("组件自检", job, running=False, on_done=done)
 
     def open_log_dir(self) -> None:
         self._open_path(self.cfg.log.dir)
@@ -416,34 +448,93 @@ class MainWindow(tk.Tk):
 # ====================================================================== 启动
 
 class _StreamProxy:
-    """把 print / traceback 重定向到日志 —— windowed exe 没有 stdout。"""
+    """windowed exe 的 stdout / stderr 兜底。
 
-    def __init__(self, level: str = "INFO"):
-        self._level = level
-        self._buf = ""
+    ⚠️ 绝对不能把写入转发给 loguru。
+
+    踩过的坑：App 初始化时 `setup_logging()` 会把 `sys.stderr` 注册成一个
+    loguru sink。如果这里的 write() 又去调 loguru，就变成：
+
+        写日志 → 触发 stderr sink → _StreamProxy.write → 再调 loguru
+              → 再触发 stderr sink → …
+
+    无限递归，最后一屏 `RecursionError: maximum recursion depth exceeded`
+    加一句 `lost sys.stderr`。因为 App 是在主线程里构造的，
+    用户看到的就是：**点一下「扫码登录」，窗口直接未响应**。
+
+    所以这里直接落文件，绕开 loguru。
+    """
+
+    def __init__(self, path: str = ""):
+        self._path = path
+        self._fh = None
+        self._failed = False
+
+    def _file(self):
+        if self._fh is None and self._path and not self._failed:
+            try:
+                parent = os.path.dirname(os.path.abspath(self._path))
+                if parent:
+                    os.makedirs(parent, exist_ok=True)
+                self._fh = open(self._path, "a", encoding="utf-8", errors="replace")
+            except Exception:
+                self._failed = True
+                self._fh = None
+        return self._fh
 
     def write(self, text: str) -> int:
-        self._buf += text
-        while "\n" in self._buf:
-            line, _, self._buf = self._buf.partition("\n")
-            if line.strip():
-                log().log(self._level, line.rstrip())
+        if not text:
+            return 0
+        fh = self._file()
+        if fh is not None:
+            try:
+                fh.write(text)
+                fh.flush()
+            except Exception:
+                self._failed = True
         return len(text)
 
     def flush(self) -> None:
-        if self._buf.strip():
-            log().log(self._level, self._buf.rstrip())
-        self._buf = ""
+        if self._fh is not None:
+            try:
+                self._fh.flush()
+            except Exception:
+                pass
+
+    def isatty(self) -> bool:
+        return False
+
+    @property
+    def encoding(self) -> str:
+        return "utf-8"
 
 
-def _redirect_streams() -> None:
+def _redirect_streams(log_dir: str = "") -> None:
+    """给 windowed exe 补上 stdout / stderr。
+
+    不做这一步的话，任何一句 `print()` 都会因为 `sys.stdout is None`
+    直接抛 AttributeError。
+    """
+    from ..paths import app_root
+
+    if not log_dir:
+        log_dir = os.path.join(app_root(), "logs")
     if sys.stdout is None:
-        sys.stdout = _StreamProxy("INFO")
+        sys.stdout = _StreamProxy(os.path.join(log_dir, "stdout.log"))
     if sys.stderr is None:
-        sys.stderr = _StreamProxy("ERROR")
+        sys.stderr = _StreamProxy(os.path.join(log_dir, "stderr.log"))
 
 
 def launch(config_path: Optional[str] = None) -> int:
+    from ..paths import app_root, is_frozen
+
+    # 双击启动时 cwd 可能是 system32，切到 exe 所在目录
+    if is_frozen():
+        try:
+            os.chdir(app_root())
+        except Exception:
+            pass
+
     _redirect_streams()
     try:
         window = MainWindow(config_path)

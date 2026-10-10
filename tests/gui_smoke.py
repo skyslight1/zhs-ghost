@@ -168,6 +168,30 @@ def main() -> int:
         traceback.print_exc()
         check(False, "布局检查抛异常")
 
+    # ---------------------------------------------------------------- 回归
+    # windowed exe 的 stdout/stderr 代理曾经把写入转发给 loguru，而 App 初始化
+    # 又会把 sys.stderr 注册成 loguru sink —— 于是写日志和写 stderr 互相触发，
+    # 无限递归。表现是"点一下扫码登录窗口就未响应"。
+    # 这个 bug 只有真跑一遍 setup_logging 才暴露，所以单起一个进程验证，
+    # 并用超时兜住（万一又递归会挂住）。
+    print("\n== 回归：stream 代理 vs loguru ==")
+    import subprocess
+
+    script = os.path.join(HERE, "tests", "check_stream_proxy.py")
+    try:
+        proc = subprocess.run(
+            [sys.executable, script],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=60,
+        )
+        ok = proc.returncode == 0 and "STREAM_PROXY_OK" in (proc.stdout or "")
+        detail = "" if ok else f" —— {(proc.stderr or proc.stdout or '')[-220:]}"
+        check(ok, "stream 代理不会与 loguru 互相递归" + detail)
+    except subprocess.TimeoutExpired:
+        check(False, "stream 代理测试超时（递归或死锁）")
+    except Exception as e:
+        check(False, f"stream 代理测试异常: {e}")
+
     print()
     failed = [m for ok, m in results if not ok]
     if failed:
