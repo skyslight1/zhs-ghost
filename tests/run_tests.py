@@ -33,6 +33,22 @@ from zhsgo.risk.pacer import PacerConfig  # noqa: E402
 from zhsgo.runner.study import StudyRunner, ZhidaoContext  # noqa: E402
 from zhsgo.util import AttrDict  # noqa: E402
 
+
+def _force_utf8() -> None:
+    """Windows 上 stdout 可能是 cp1252，打印中文会 UnicodeEncodeError。
+
+    本地开发机通常是 UTF-8 所以看不出来，但 GitHub Actions 的
+    windows-latest 就是 cp1252 —— 这个函数是那次 CI 失败的产物。
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
+_force_utf8()
+
 RESULTS: List[tuple[bool, str]] = []
 
 
