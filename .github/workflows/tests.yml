@@ -1,0 +1,41 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  selftest:
+    name: selftest (py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      # 只装自测真正需要的依赖。playwright / ddddocr 是可选的重依赖，
+      # 自测用假时钟跑完整学习循环，不需要它们 —— 所以 CI 能跑得很快。
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests pycryptodome PyYAML loguru
+
+      - name: Byte-compile all sources
+        run: python -m compileall -q zhsgo main.py tests
+
+      - name: Run self test
+        run: python tests/run_tests.py
+
+      - name: Dry-run CLI self check
+        run: |
+          cp config.example.yaml config.yaml
+          python main.py --dry-run

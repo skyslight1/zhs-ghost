@@ -1,4 +1,8 @@
-# zhsgo — 智慧树自动学习工具
+# zhs-ghost — 智慧树自动学习工具
+
+[![tests](https://github.com/skyslight1/zhs-ghost/actions/workflows/tests.yml/badge.svg)](https://github.com/skyslight1/zhs-ghost/actions/workflows/tests.yml)
+[![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](pyproject.toml)
 
 借鉴 [fuckZHS](https://github.com/VermiIIi0n/fuckZHS)（MIT）的接口分析成果，
 从源码层面重写的一份实现。
