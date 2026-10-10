@@ -57,7 +57,23 @@ def main() -> int:
             win.update()
         check(True, "四个标签页都能渲染")
 
-        # 进度更新
+        # 二维码弹窗生命周期：使用一个有效 PNG，确认显示对象持有引用，关闭后真正销毁。
+        try:
+            import base64
+            qr_bytes = base64.b64decode(
+                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+            )
+            win.tab_study.show_qr(qr_bytes)
+            win.update()
+            qr_win = win.tab_study._qr_window
+            check(qr_win is not None and qr_win.winfo_exists(), "二维码弹窗创建")
+            check(win.tab_study._qr_photo is not None, "二维码图片引用被保留")
+            win.tab_study._on_qr_window_closed()
+            win.update()
+            check(win.tab_study._qr_window is None, "关闭二维码后弹窗引用清理")
+        except Exception as e:
+            check(False, f"二维码弹窗生命周期异常: {e}")
+
         win.tab_study.update_progress(Progress(
             phase=PHASE_STUDY, course="测试课程", video="第 1 讲",
             message="学习中", current=45.0, total=100.0))

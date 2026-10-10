@@ -89,6 +89,8 @@ class App:
             except Exception as e:
                 log().warning(f"恢复登录态失败，需要重新登录: {e}")
                 self.http.cookies.clear()
+                self.state.cookies = []
+                self.save_state()
 
     # ---------------------------------------------------------------- 状态
 
@@ -124,20 +126,32 @@ class App:
 
     # ---------------------------------------------------------------- 登录
 
-    def login(self, on_qr=None) -> None:
+    def login(self, on_qr=None, *, force: bool = False, qr: bool = False,
+              cancel_event=None) -> None:
         cfg = self.cfg.auth
-        if self.http.cookies and len(self.http.cookies) and self.passport.uuid:
+        if not force and self.http.cookies and len(self.http.cookies) and self.passport.uuid:
             log().info("已有登录态，跳过登录")
             return
 
-        if cfg.use_qr or not (cfg.username and cfg.password):
-            jar = self.passport.login_qr(on_qr)
-        else:
-            jar = self.passport.login_password(cfg.username, cfg.password)
+        old_cookies = self.http.cookies.copy()
+        old_uuid = self.passport.uuid
+        try:
+            if force:
+                # 强制重新扫码时隔离旧账号的 cookie，避免智慧树把新旧会话混在一起。
+                self.http.cookies.clear()
+                self.passport.uuid = None
+            if qr or cfg.use_qr or not (cfg.username and cfg.password):
+                jar = self.passport.login_qr(on_qr, cancel_event=cancel_event)
+            else:
+                jar = self.passport.login_password(cfg.username, cfg.password)
 
-        self.http.cookies = jar
-        self.save_state()
-        log().info(f"登录完成，uuid={self.passport.uuid}")
+            self.http.cookies = jar
+            self.save_state()
+            log().info(f"登录完成，uuid={self.passport.uuid}")
+        except Exception:
+            self.http.cookies = old_cookies
+            self.passport.uuid = old_uuid
+            raise
 
     # ---------------------------------------------------------------- LLM
 

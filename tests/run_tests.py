@@ -609,13 +609,108 @@ def test_config() -> None:
         check(not errs, f"示例配置无硬性问题: {errs}")
 
 
-# ============================================================== main
+# ============================================================== 智慧树扫码登录
+
+
+def test_zhihuishu_qr_login() -> None:
+    section("智慧树二维码登录")
+    import base64
+    import threading
+    from urllib.parse import quote_plus
+    from requests.cookies import RequestsCookieJar
+    from zhsgo.api.passport import Passport
+    from zhsgo.errors import Stopped
+
+    class FakeHttp:
+        def __init__(self, responses):
+            self.cookies = RequestsCookieJar()
+            self.qr_response = responses[0] if responses else AttrDict({}, default=None)
+            self.responses = list(responses[1:])
+            self.calls = []
+
+        def get(self, url, params=None, **kwargs):
+            self.calls.append((url, params, kwargs))
+            if url.endswith("getLoginQrInfo"):
+                return self.responses.pop(0)
+            if url.endswith("getLoginQrImg"):
+                return self.qr_response
+            return AttrDict({}, default=None)
+
+    encoded = base64.urlsafe_b64encode(b"qr-image").decode().rstrip("=")
+    uid = "qr-test-uid"
+    jar = RequestsCookieJar()
+    jar.set("CASLOGC", quote_plus(json.dumps({"uuid": uid})))
+
+    http = FakeHttp([
+        AttrDict({"data": {"qrToken": "token-1", "img": f"data:image/png;base64,{encoded}"}}),
+        AttrDict({"result": {"status": -1}}),
+        AttrDict({"result": {"status": 1, "oncePassword": "once-1"}}),
+    ])
+    http.cookies = jar
+    clock = FakeClock()
+    shown = []
+    passport = Passport(http, clock)
+    result = passport.login_qr(shown.append, timeout=5, poll=0)
+    check(shown == [b"qr-image"], "智慧树二维码支持 envelope/Data URI/Base64")
+    check(result.get("CASLOGC") is not None and passport.uuid == uid,
+          "扫码成功后接管 CASLOGC 并解析 uuid")
+    nav = [c for c in http.calls if "passport.zhihuishu.com/login" in c[0]]
+    check(nav and all(c[2].get("expect_json") is False for c in nav),
+          "智慧树登录页按 HTML 导航响应处理")
+
+    cancel = threading.Event()
+    cancel.set()
+    cancelled = Passport(FakeHttp([]), FakeClock())
+    stopped = None
+    try:
+        cancelled.login_qr(cancel_event=cancel)
+    except Stopped:
+        stopped = True
+    check(stopped is True, "二维码登录支持在首个请求前取消")
+
+    bad = Passport(FakeHttp([
+        AttrDict({"qrToken": "token-2", "img": "not base64"}),
+    ]), FakeClock())
+    invalid = None
+    try:
+        bad.login_qr()
+    except Exception as e:
+        invalid = e
+    check(type(invalid).__name__ == "AuthError", "非法二维码 Base64 返回 AuthError")
+
+
+
+def test_zhidao_cross_site_login() -> None:
+    section("共享课跨站登录")
+    from zhsgo.api.zhidao import ZhidaoApi
+
+    class FakeHttp:
+        def __init__(self):
+            self.calls = []
+
+        def get(self, url, params=None, **kwargs):
+            self.calls.append((url, params, kwargs))
+            return AttrDict({}, default=None)
+
+    http = FakeHttp()
+    api = ZhidaoApi(http, Guard(GuardConfig(), None, FakeClock()),
+                    Pacer(PacerConfig(), FakeClock()), lambda: "uuid-x")
+    api.cross_site_login("1919")
+
+    check(len(http.calls) == 1, "跨站登录只发一次请求")
+    url, params, kwargs = http.calls[0]
+    check("studyservice-api.zhihuishu.com/login/gologin" in url, "指向 study 服务跨站登录端点")
+    check(kwargs.get("expect_json") is False,
+          "gologin 落地页是 HTML，不按 JSON 解析（回归：响应不是 JSON）")
+    check("recruitAndCourseId=1919" in (params or {}).get("fromurl", ""), "fromurl 带课程 ID")
+
 
 def main() -> int:
     tests = [
         test_config, test_crypto, test_fingerprint, test_pacer, test_watchpoint,
         test_budget, test_guard, test_study_loop, test_study_loop_pause_reports,
         test_hike_loop, test_budget_interrupts_loop, test_answer_parsing,
+        test_zhihuishu_qr_login, test_zhidao_cross_site_login,
     ]
     for i, fn in enumerate(tests):
         # 节拍本身是随机的，但测试必须可复现 —— 每个用例用独立种子，

@@ -233,16 +233,26 @@ class StudyTab(tk.Frame):
             root = self.window
             x = root.winfo_rootx() + (root.winfo_width() - w) // 2
             y = root.winfo_rooty() + (root.winfo_height() - h) // 2
-            win.geometry(f"{w}x{h}+{max(x, 0)}+{max(y, 0)}")
+            sw = root.winfo_screenwidth()
+            sh = root.winfo_screenheight()
+            x = min(max(x, 0), max(sw - w, 0))
+            y = min(max(y, 0), max(sh - h, 0))
+            win.geometry(f"{w}x{h}+{x}+{y}")
         except Exception:
             pass
 
     def _on_qr_window_closed(self) -> None:
         """用户手动关掉二维码窗口 = 放弃这次登录。"""
+        win = self._qr_window
         self._qr_window = None
         self._qr_photo = None
+        if win is not None:
+            try:
+                win.destroy()
+            except Exception:
+                pass
         self.window.action_stop()
-        self.badge_account.set("未登录", "idle")
+        self.qr_hint.configure(text="二维码已关闭，登录已取消", fg=P["muted"])
 
     def hide_qr(self) -> None:
         if self._qr_window is not None:

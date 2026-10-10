@@ -2,7 +2,7 @@
 
 > 写给接手维护的人。读完这一份就能独立干活。
 >
-> **最后更新**：2026-10-10  ·  **当前版本**：v1.2.5  ·  **仓库**：https://github.com/skyslight1/zhs-ghost
+> **最后更新**：2026-10-10  ·  **当前版本**：v1.3.0  ·  **仓库**：https://github.com/skyslight1/zhs-ghost
 
 ---
 
@@ -27,53 +27,38 @@
 | tag | 状态 | 说明 |
 |---|---|---|
 | v1.0.0 ~ v1.1.0 | 可用 | 命令行版 |
-| **v1.2.0 ~ v1.2.2** | ⚠️ **有 bug，建议下架** | 所有 exe 的 GUI 一开就崩（tkinter 没打进去） |
+| **v1.2.0 ~ v1.2.2** | ⚠️ **已标 pre-release** | 所有 exe 的 GUI 一开就崩（tkinter 没打进去） |
 | v1.2.3 | 可用 | 修 tkinter |
 | v1.2.4 | 可用 | 修「点扫码登录窗口未响应」 |
-| **v1.2.5** | **最新** | 修「二维码被压扁看不见」 |
+| v1.2.5 | 可用 | 修「二维码被压扁看不见」 |
+| **v1.3.0** | **最新** | 扫码登录重构（强制重新扫码/可取消/弹窗生命周期）+ 修「学习失败： 响应不是 JSON（gologin）」+ 版本号统一 |
 
 CI（`.github/workflows/release.yml`）在推 tag 时自动构建 4 个 exe 并发布，
-耗时约 7 分钟。构建前会跑 106 项单元测试 + 19 项 GUI 冒烟，
+耗时约 7 分钟。构建前会跑 115 项单元测试 + 22 项 GUI 冒烟，
 GUI 版还会真启动一次、真点一次「扫码登录」并检查窗口是否响应。
 
 ### 1.2 已知问题（按优先级）
 
-**A. 已登录状态下点「扫码登录」没有任何反应** ← 最该先修
+**A / B / C：已在 v1.3.0 修复**
 
-`zhsgo/app.py` 的 `App.login()` 开头：
+- **A**：GUI 的「扫码登录」每次点击都强制发起新的智慧树二维码会话
+  （`App.login(force=True, qr=True)`），不再被旧 `state/state.json` 登录态静默短路；
+  CLI 保持默认复用登录态的行为。
+- **B**：二维码弹窗位置限制在屏幕边界内；关闭弹窗真正销毁窗口并取消后台轮询；
+  取消/失败时回滚旧 Cookie 与 uuid，不会出现半更新状态。
+- **C**：窗口标题带版本号（`zhs-ghost v1.3.0 · …`），
+  `tests/check_gui_login_no_hang.py` 改为按前缀匹配窗口；
+  `pyproject.toml` / `zhsgo/__init__.py` / `packaging/version_info.txt` 统一为 1.3.0。
 
-```python
-if self.http.cookies and len(self.http.cookies) and self.passport.uuid:
-    log().info("已有登录态，跳过登录")
-    return                      # ← 直接返回，GUI 上表现为"点了没反应"
-```
+**v1.3.0 顺带修复（学习链路首个真实账号端到端反馈）**
 
-`state/state.json` 里存着上次的登录态，所以用户第二次点这个按钮时会静默跳过。
-用户看到的就是"点了按钮，什么都不发生"。
-
-**建议修法**：给 `login()` 加 `force: bool = False` 参数，GUI 的 `action_login`
-传 `force=True`（按钮语义就是"我要登录"），CLI 保持默认。
-
-**B. 二维码弹窗可能跑到屏幕外**
-
-`zhsgo/gui/tab_study.py` 的 `_center_qr_window()` 只做了 `max(x, 0)`，
-没有限制上界。主窗口贴屏幕右下角时，弹窗会被放到屏幕外。
-
-**建议修法**：
-
-```python
-sw, sh = root.winfo_screenwidth(), root.winfo_screenheight()
-x = min(max(x, 0), max(sw - w, 0))
-y = min(max(y, 0), max(sh - h, 0))
-```
-
-**C. 窗口标题没有版本号**
-
-用户没法确认自己手上是哪个版本 —— 这次排查"还是没二维码"就卡在这上面。
-建议改成 `self.title(f"zhs-ghost {__version__} · 智慧树自动学习")`。
-
-⚠️ 改完要同步改 `tests/check_gui_login_no_hang.py` 里的 `APP_TITLE`，
-它是按标题找窗口的（建议改成前缀匹配更稳）。
+- **跨站登录按 JSON 解析**：`ZhidaoApi.cross_site_login` 请求的
+  `studyservice-api.zhihuishu.com/login/gologin` 是跳转型端点，正常返回 HTML
+  落地页，原实现按 JSON 解析导致「学习失败： 响应不是 JSON」——
+  共享课学习的第一个必经请求必然失败。已改为 `expect_json=False`
+  （对齐上游 fuckZHS：只发请求不解析响应）。
+- **登录页协议**：`passport` 的登录页导航请求同样改为 HTML 处理；
+  二维码响应支持 `data`/`result` envelope 与多种 Base64 变体。
 
 **D. git 历史里有带桌面碎片的旧截图**
 
@@ -93,23 +78,25 @@ git push --force origin main
 git push --delete origin v1.2.0 v1.2.1 v1.2.2 v1.2.3 v1.2.4 v1.2.5
 ```
 
-**E. v1.2.0 ~ v1.2.2 的 Release 应该标 pre-release 或删掉**
+**E. v1.2.0 ~ v1.2.2 的 Release 已标 pre-release（v1.3.0 发布时处理）**
 
-那三个版本的所有 exe 一开 GUI 就崩，留着会让用户下到坏包。
+那三个版本的所有 exe 一开 GUI 就崩。已用 `gh release edit vX --prerelease`
+标记；如需彻底删除：
 
 ```bash
-gh release edit v1.2.0 --prerelease
-gh release edit v1.2.1 --prerelease
-gh release edit v1.2.2 --prerelease
+gh release delete v1.2.0 --yes && git push --delete origin v1.2.0
+gh release delete v1.2.1 --yes && git push --delete origin v1.2.1
+gh release delete v1.2.2 --yes && git push --delete origin v1.2.2
 ```
 
 ### 1.3 待办
 
-- [ ] 上面 A / B / C 三个修复
-- [ ] E：处理 v1.2.0~v1.2.2
-- [ ] D：决定是否清理 git 历史
 - [ ] **没有真实账号的端到端测试** —— 登录、刷课、过验证码这三条主流程
-      全靠人工验证。这是目前最大的质量缺口。
+      全靠人工验证。这是目前最大的质量缺口（v1.3.0 的两个修复都来自首次
+      真实账号反馈）。
+- [ ] 上游 fuckZHS PR #168 的 Polymas / AI 智课（`cloudapi.polymas.com`、
+      `hikeAiCourse`）尚未支持，有需要时评估移植（注意保持现有分层）。
+- [ ] D：决定是否清理 git 历史（见 1.2 的 D 节，需要重写历史 + force push）
 - [ ] 微信小程序端（`studyvideoh5` 之外的入口）未支持
 - [ ] 命令行版没有 `--gui` 之外的交互式引导
 

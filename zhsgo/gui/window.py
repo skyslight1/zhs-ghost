@@ -21,6 +21,7 @@ from tkinter import messagebox, ttk
 from typing import Any, Callable, List, Optional
 
 from ..app import App
+from .. import __version__
 from ..config import Config
 from ..errors import BudgetExhausted, CaptchaRequired, RiskLocked, Stopped, ZhsError
 from ..logger import get as log
@@ -33,7 +34,8 @@ from .tab_courses import CoursesTab
 from .tab_log import LogTab, install_gui_sink
 from .tab_study import StudyTab
 
-APP_TITLE = "zhs-ghost · 智慧树自动学习"
+# 标题带版本号：用户报障时能直接确认手上是哪个版本
+APP_TITLE = f"zhs-ghost v{__version__} · 智慧树自动学习"
 
 
 class GuiObserver(ControlObserver):
@@ -78,6 +80,8 @@ class MainWindow(tk.Tk):
         self.app: Optional[App] = None
         self._log_sink = None
         self._toast_timer: Optional[str] = None
+        self._login_generation = 0
+        self._login_cancel: Optional[threading.Event] = None
 
         self._build_header()
         self._build_tabs()
@@ -103,6 +107,8 @@ class MainWindow(tk.Tk):
     def _on_destroy(self, event: Any) -> None:
         if event.widget is not self:
             return
+        if self._login_cancel is not None:
+            self._login_cancel.set()
         # 所有待执行的 after 都要显式取消：widget 销毁后 Tk 找不到回调命令，
         # 会在 stderr 刷一串 "invalid command name ..."
         for attr in ("_autostart_id", "_toast_timer"):
@@ -230,25 +236,36 @@ class MainWindow(tk.Tk):
         self.tab_study.set_busy(True, running=running)
         self.set_status(f"{name}中…", "running", sticky=True)
 
+        failed = False
+
         def target() -> Any:
+            nonlocal failed
             try:
                 return fn()
             except Stopped:
+                failed = True
                 self.bridge.post(self._job_finished, f"{name}已停止", "warn", None)
             except BudgetExhausted as e:
+                failed = True
                 self.bridge.post(self._job_finished, f"配额用尽，正常收工：{e}", "ok", None)
             except CaptchaRequired as e:
+                failed = True
                 self.bridge.post(self._job_finished, f"人机验证未能通过：{e}", "error", None)
             except RiskLocked as e:
+                failed = True
                 self.bridge.post(self._job_finished, f"风控锁定，建议今天停手：{e}", "error", None)
             except ZhsError as e:
+                failed = True
                 self.bridge.post(self._job_finished, f"{name}失败：{e}", "error", None)
             except Exception as e:  # noqa: BLE001
+                failed = True
                 log().exception(e)
                 self.bridge.post(self._job_finished, f"{name}异常：{e}", "error", None)
             return None
 
         def done(result: Any) -> None:
+            if failed:
+                return
             if on_done:
                 self.bridge.post(on_done, result)
             self.bridge.post(self._job_finished, f"{name}完成", "ok", result)
@@ -260,6 +277,9 @@ class MainWindow(tk.Tk):
             self.toast("已有任务在运行", "warn")
 
     def _job_finished(self, message: str, state: str, _result: Any) -> None:
+        if message.startswith("登录"):
+            self._login_cancel = None
+            self.tab_study.hide_qr()
         self.tab_study.set_busy(False)
         self._refresh_quota()
         self.set_status(message, state)
@@ -270,28 +290,43 @@ class MainWindow(tk.Tk):
 
     def action_login(self) -> None:
         app = self._ensure_app()
+        self._login_generation += 1
+        generation = self._login_generation
+        cancel = threading.Event()
+        self._login_cancel = cancel
+
+        def show_qr(image: bytes) -> None:
+            self.bridge.post(self._show_login_qr, generation, image)
 
         def job() -> None:
-            app.login(on_qr=lambda img: self.bridge.post(self.tab_study.show_qr, img))
+            app.login(on_qr=show_qr, force=True, qr=True, cancel_event=cancel)
 
         def done(_r: Any) -> None:
+            if generation != self._login_generation:
+                return
+            self._login_cancel = None
             uid = app.passport.uuid or ""
             self.tab_study.hide_qr()
             self.tab_study.set_account(bool(uid), uid)
             self._refresh_quota()
 
-        # running=True：扫码期间「停止」要保持可用，用户得能放弃这次登录
         self._run_job("登录", job, running=True, on_done=done)
+
+    def _show_login_qr(self, generation: int, image: bytes) -> None:
+        if generation != self._login_generation:
+            return
+        self.tab_study.show_qr(image)
 
     def action_fetch(self) -> None:
         app = self._ensure_app()
 
         def job() -> List[dict]:
             if not app.passport.uuid:
-                app.login()
+                app.login(on_qr=lambda img: self.bridge.post(self.tab_study.show_qr, img))
             return StudyRunner(app).list_courses()
 
         def done(courses: Any) -> None:
+            self.tab_study.hide_qr()
             self.tab_courses.set_courses(courses or [])
             self.tab_study.set_account(bool(app.passport.uuid), app.passport.uuid or "")
 
@@ -325,6 +360,8 @@ class MainWindow(tk.Tk):
         self._run_job("学习", job)
 
     def action_stop(self) -> None:
+        if self._login_cancel is not None:
+            self._login_cancel.set()
         if not self.worker.busy:
             return
         self.stop_event.set()
@@ -426,6 +463,8 @@ class MainWindow(tk.Tk):
             if not messagebox.askyesno(APP_TITLE, "学习任务还在运行，确定要退出吗？\n退出会保存当前进度。"):
                 return
             self.stop_event.set()
+            if self._login_cancel is not None:
+                self._login_cancel.set()
             self.worker.join(4.0)
 
         try:

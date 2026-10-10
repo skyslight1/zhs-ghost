@@ -94,10 +94,15 @@ class ZhidaoApi:
         return out
 
     def cross_site_login(self, rac_id: str) -> None:
-        """跨站登录：给 studyh5 域建立会话。"""
+        """跨站登录：给 studyh5 域建立会话。
+
+        这个端点是导航/跳转型：正常响应就是 HTML 落地页，会话经 302 链
+        建立在 cookie 里。上游 fuckZHS 同样只发请求、从不解析响应体 ——
+        一旦按 JSON 解析，就会在真正拉课之前抛「响应不是 JSON」。
+        """
         self.http.get(ep.ZHIDAO_GOLOGIN, {
             "fromurl": f"https://studyh5.zhihuishu.com/videoStudy.html#/studyVideo?recruitAndCourseId={rac_id}"
-        })
+        }, expect_json=False)
 
     def course_info(self, rac_id: str) -> AttrDict:
         return self.call(ep.ZHIDAO_QUERY_COURSE, {"recruitAndCourseId": rac_id},

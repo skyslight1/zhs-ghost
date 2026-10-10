@@ -18,13 +18,13 @@ import subprocess
 import sys
 import time
 
-APP_TITLE = "zhs-ghost · 智慧树自动学习"
+APP_TITLE_PREFIX = "zhs-ghost"   # 主窗口标题带版本号（v1.3.0 起），按前缀找更稳
 WAIT_BEFORE = 6.0     # 等窗口起来
 WAIT_AFTER = 18.0     # 点完按钮后观察多久
 
 
-def _find_window(title: str) -> int:
-    """按标题找顶层窗口（需要进程 DPI aware，所以调用方要先设好）。"""
+def _find_window(title_prefix: str) -> int:
+    """按标题前缀找顶层窗口（需要进程 DPI aware，所以调用方要先设好）。"""
     import ctypes
 
     user32 = ctypes.windll.user32
@@ -39,7 +39,7 @@ def _find_window(title: str) -> int:
             return True
         buf = ctypes.create_unicode_buffer(length + 1)
         user32.GetWindowTextW(hwnd, buf, length + 1)
-        if buf.value == title:
+        if buf.value.startswith(title_prefix):
             found.append(hwnd)
             return False
         return True
@@ -95,7 +95,7 @@ def main() -> int:
             print(f"[!!] 进程在启动阶段就退出了，退出码 {proc.returncode}")
             return 1
 
-        hwnd = _find_window(APP_TITLE)
+        hwnd = _find_window(APP_TITLE_PREFIX)
         if not hwnd:
             print("[!!] 找不到窗口")
             return 1

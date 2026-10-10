@@ -6,16 +6,16 @@
 """
 from __future__ import annotations
 
+import base64
+import binascii
 import json
-import time
-from base64 import b64decode
 from typing import Any, Callable, Dict, Optional
 from urllib.parse import unquote_plus
 
 from requests.cookies import RequestsCookieJar
 
 from ..clock import Clock
-from ..errors import ApiError, AuthError, NoCookies
+from ..errors import ApiError, AuthError, NoCookies, Stopped
 from ..logger import get as log
 from ..net import HttpClient, endpoints as ep
 from ..util import AttrDict, jar_from_dict
@@ -31,6 +31,41 @@ class Passport:
         self.clock = clock or Clock()
         self.proxies = proxies or {}
         self.uuid: Optional[str] = None
+
+    @staticmethod
+    def _payload(raw: Any) -> AttrDict:
+        """把智慧树登录接口的响应统一成一层字典。"""
+        if not isinstance(raw, dict):
+            raise AuthError(f"智慧树登录接口返回格式异常: {raw!r}")
+        payload = raw
+        for key in ("data", "result"):
+            nested = payload.get(key)
+            if isinstance(nested, dict):
+                payload = nested
+                break
+        return AttrDict(payload, default=None)
+
+    @staticmethod
+    def _decode_qr_image(value: Any) -> bytes:
+        if not isinstance(value, str) or not value.strip():
+            raise AuthError("智慧树二维码图片为空")
+        text = value.strip()
+        if "," in text and text.lower().startswith("data:image/"):
+            text = text.split(",", 1)[1]
+        text = "".join(text.split())
+        text += "=" * (-len(text) % 4)
+        try:
+            image = base64.b64decode(text, altchars=b"-_", validate=True)
+        except (ValueError, binascii.Error) as exc:
+            raise AuthError("智慧树二维码图片不是有效的 Base64") from exc
+        if not image:
+            raise AuthError("智慧树二维码图片为空")
+        return image
+
+    @staticmethod
+    def _check_cancel(cancel_event: Any) -> None:
+        if cancel_event is not None and cancel_event.is_set():
+            raise Stopped("二维码登录已取消")
 
     # ------------------------------------------------------------ uuid
 
@@ -62,7 +97,8 @@ class Passport:
         if not username or not password:
             raise AuthError("账号或密码为空")
 
-        self.http.get(ep.LOGIN_PAGE, navigation=True)
+        self.http.get(ep.LOGIN_PAGE, navigation=True, expect_json=False)
+
         info = self.http.post(ep.VALIDATE_ACCOUNT, {"account": username, "password": password})
 
         status = info.get("status")
@@ -83,7 +119,7 @@ class Passport:
 
         pwd = info.get("pwd")
         self.http.get(ep.LOGIN_PAGE, {"account": username, "pwd": pwd, "validate": 0},
-                      navigation=True)
+                      navigation=True, expect_json=False)
         jar = self.http.cookies.copy()
         self.adopt(jar)
         log().info("账号密码登录成功")
@@ -92,25 +128,31 @@ class Passport:
     # ------------------------------------------------------------ 二维码
 
     def login_qr(self, on_qr: Optional[Callable[[bytes], None]] = None,
-                 *, timeout: float = QR_MAX_WAIT, poll: float = QR_POLL_INTERVAL) -> RequestsCookieJar:
-        self.http.get(ep.LOGIN_PAGE, navigation=True)
-        raw = self.http.get(ep.QR_IMAGE)
-        token = raw.get("qrToken")
-        img_b64 = raw.get("img")
-        if not token or not img_b64:
-            raise AuthError(f"获取二维码失败: {raw}")
+                 *, timeout: float = QR_MAX_WAIT, poll: float = QR_POLL_INTERVAL,
+                 cancel_event: Any = None) -> RequestsCookieJar:
+        self._check_cancel(cancel_event)
+        self.http.get(ep.LOGIN_PAGE, navigation=True, expect_json=False)
+        self._check_cancel(cancel_event)
 
-        image = b64decode(img_b64)
+        raw = self._payload(self.http.get(ep.QR_IMAGE))
+        token = raw.get("qrToken") or raw.get("token")
+        img_b64 = raw.get("img") or raw.get("image") or raw.get("qrImg")
+        if not token:
+            raise AuthError(f"获取智慧树二维码失败：响应缺少 qrToken: {raw}")
+        image = self._decode_qr_image(img_b64)
+        self._check_cancel(cancel_event)
         if on_qr:
             on_qr(image)
 
         deadline = self.clock.now() + timeout
         scanned = False
         while self.clock.now() < deadline:
+            self._check_cancel(cancel_event)
             self.clock.sleep(poll)
-            info = self.http.get(ep.QR_INFO, {"qrToken": token})
+            self._check_cancel(cancel_event)
+            info = self._payload(self.http.get(ep.QR_INFO, {"qrToken": token}))
             status = info.get("status")
-            message = info.get("msg", "")
+            message = info.get("msg") or info.get("message") or ""
 
             if status == -1:
                 continue
@@ -120,8 +162,14 @@ class Passport:
                     log().info(f"二维码已扫描: {message}")
                 continue
             if status == 1:
+                once_password = info.get("oncePassword") or info.get("pwd")
+                if not once_password:
+                    raise AuthError(f"智慧树登录成功响应缺少一次性凭证: {info}")
+                self._check_cancel(cancel_event)
                 log().info("已获取一次性登录凭证")
-                self.http.get(ep.LOGIN_PAGE, {"pwd": info.get("oncePassword")}, navigation=True)
+                self.http.get(ep.LOGIN_PAGE, {"pwd": once_password},
+                              navigation=True, expect_json=False)
+                self._check_cancel(cancel_event)
                 jar = self.http.cookies.copy()
                 self.adopt(jar)
                 log().info("二维码登录成功")
